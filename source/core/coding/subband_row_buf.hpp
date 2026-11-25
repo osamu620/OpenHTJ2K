@@ -72,6 +72,12 @@ struct j2k_subband_row_buf {
   sprec_t *ring_buf;  // cb_h × sb->stride floats (one strip wide)
   int32_t ring_y0;    // first row of current strip in ring_buf (= strip_y0)
 
+  // Column window of a windowed decode (set_col_window), in subband columns: code-blocks
+  // that lie wholly outside [win_x0, win_x1) are not decoded.  Default: no window.
+  int32_t win_x0   = INT32_MIN;
+  int32_t win_x1   = INT32_MAX;
+  bool win_zeroed  = false;  // ring and prefetch buffers zeroed for a window (once)
+
   // Scratch buffers reused across codeblocks (serial decode; one block at a time).
   int32_t *cb_sample_buf;
   uint8_t *cb_state_buf;
@@ -176,6 +182,20 @@ struct j2k_subband_row_buf {
   // the single-tile reuse frame boundary (which bypasses free_resources) must
   // call it too, or a straggler races the next frame's init() memcpy.
   void drain_prefetch();
+
+  // Restrict decoding to the code-blocks that meet subband columns [x0, x1) (ring mode
+  // only).  The samples of the other code-blocks are left at zero, or at what an earlier
+  // frame decoded there, so a caller must only use columns inside the window, widened by
+  // the synthesis filter's reach when it chose the window.  clear_col_window() decodes
+  // every code-block again.
+  void set_col_window(int32_t x0, int32_t x1);
+  void clear_col_window() {
+    win_x0 = INT32_MIN;
+    win_x1 = INT32_MAX;
+  }
+  bool in_col_window(const j2k_codeblock *b) const {
+    return static_cast<int32_t>(b->get_pos1().x) > win_x0 && static_cast<int32_t>(b->get_pos0().x) < win_x1;
+  }
 
   // Return pointer into sb->i_samples for abs_row.
   // Decodes the containing codeblock strip if not yet decoded.

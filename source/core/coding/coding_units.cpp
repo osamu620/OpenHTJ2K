@@ -3549,14 +3549,33 @@ void j2k_tile_component::init_line_decode(bool ring_mode) {
 }
 
 void j2k_tile_component::set_line_decode_col_range(uint32_t col_lo, uint32_t col_hi) {
-  // Only the persistent (single-tile reuse) line decoder honours a column
-  // window; see the declaration for why the per-frame path decodes full width.
-  if (line_dec == nullptr || !line_dec_persistent_) return;
+  if (line_dec == nullptr) return;
   j2k_tcomp_line_dec *ld = line_dec.get();
-  if (ld->NL_active <= 0) return;
+  // floor(n / 2) for negative n too (a window widened past the canvas origin).
+  auto half_floor = [](int32_t n) { return (n >= 0) ? n / 2 : -((1 - n) / 2); };
+  if (ld->NL_active <= 0) {
+    // No IDWT: the rows are those of the LL subband itself.
+    j2k_subband *sb    = ld->ll0_buf.sb;
+    const auto x0      = static_cast<int32_t>(sb->get_pos0().x);
+    const auto w       = static_cast<uint32_t>(sb->get_pos1().x - sb->get_pos0().x);
+    ld->ll0_buf.set_col_window(x0 + static_cast<int32_t>(std::min(col_lo, w)),
+                               x0 + static_cast<int32_t>(std::min(col_hi, w)));
+    return;
+  }
   idwt_2d_state *states    = ld->states.get();
   idwt_level_src_ctx *ctxs = ld->ctxs.get();
   const int32_t NL_act     = ld->NL_active;
+  // Two things narrow to the window:
+  //  - the code-blocks decoded: those of each subband that meet the columns the level's
+  //    synthesis reads for its window.  Every in-window sample is then the same as in a
+  //    full decode, whichever IDWT kernels run, so this applies on both line-decode paths.
+  //    Only when every level splits the columns in two (BIDIR); a DFS decomposition with
+  //    other levels decodes every code-block.
+  //  - the IDWT itself (the sub-range kernels), on the persistent (single-tile reuse) line
+  //    decoder only; see the declaration for why the per-frame path keeps the full-width
+  //    kernels.
+  bool all_bidir = true;
+  for (int32_t i = 0; i < NL_act; ++i) all_bidir = all_bidir && (ctxs[i].dir == DWT_BIDIR);
   // The caller's range is relative to the tile-component origin; the IDWT
   // states work in absolute reference-grid coordinates (u0 is the origin, odd
   // or even).  Clamp to the width first so the UINT32_MAX "to the end"
@@ -3568,6 +3587,22 @@ void j2k_tile_component::set_line_decode_col_range(uint32_t col_lo, uint32_t col
   int32_t a                 = fine.u0 + static_cast<int32_t>(std::min(col_lo, fine_w));
   int32_t b                 = fine.u0 + static_cast<int32_t>(std::min(col_hi, fine_w));
   for (int32_t i = NL_act - 1; i >= 0; --i) {
+    if (all_bidir) {
+      // Output column x of this level reads low-pass sample k with |x - 2k| <= 4 and
+      // high-pass sample k with |x - (2k + 1)| <= 4 (9/7; 5/3 reads fewer).  The subband
+      // columns [lo, hi) cover both for x in [a, b), with room to spare.
+      const int32_t lo = half_floor(a - 8);
+      const int32_t hi = half_floor(b + 8) + 1;
+      if (ctxs[i].hl_buf != nullptr) ctxs[i].hl_buf->set_col_window(lo, hi);
+      if (ctxs[i].lh_buf != nullptr) ctxs[i].lh_buf->set_col_window(lo, hi);
+      if (ctxs[i].hh_buf != nullptr) ctxs[i].hh_buf->set_col_window(lo, hi);
+      if (ctxs[i].ll0_buf != nullptr) ctxs[i].ll0_buf->set_col_window(lo, hi);
+    }
+    if (!line_dec_persistent_) {
+      a = half_floor(a) - 4;
+      b = half_floor(b + 1) + 4;
+      continue;
+    }
     idwt_2d_state_set_col_range(&states[i], a, b);
     // Mirror the same range onto the level's source ctx so the horizontal
     // IDWT producer narrows its processing window to match.  Clamp to the
@@ -3871,8 +3906,12 @@ void j2k_tile_component::reset_line_decode_cursors() {
       ctxs[i].col_lo = ctxs[i].u0;
       ctxs[i].col_hi = ctxs[i].u1;
       idwt_2d_state_set_col_range(&states[i], states[i].u0, states[i].u1);
+      hl_bufs[i].clear_col_window();
+      lh_bufs[i].clear_col_window();
+      hh_bufs[i].clear_col_window();
     }
   }
+  ld->ll0_buf.clear_col_window();
 
   // next_row cursor: tied to LL0 geometry when NL_active == 0, else unused.
   j2k_resolution *r0 = access_resolution(0);

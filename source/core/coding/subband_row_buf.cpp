@@ -141,6 +141,34 @@ void j2k_subband_row_buf::run_par_group(uint64_t packed) {
 
 // ─── init / free ──────────────────────────────────────────────────────────────
 
+void j2k_subband_row_buf::set_col_window(int32_t x0, int32_t x1) {
+  // Only the ring path skips code-blocks: there the samples of a skipped code-block are
+  // simply not written (the full-subband path keeps a buffer the caller may read whole).
+  if (!ring_mode || ring_buf == nullptr) return;
+  const auto sb_x0 = static_cast<int32_t>(sb->get_pos0().x);
+  const auto sb_x1 = static_cast<int32_t>(sb->get_pos1().x);
+  if (x0 <= sb_x0 && x1 >= sb_x1) {
+    clear_col_window();
+    return;
+  }
+  win_x0 = x0;
+  win_x1 = x1;
+  // Skipped code-blocks leave their columns of the ring unwritten, and the IDWT reads whole
+  // rows (its zero-row checks and the full-width kernels), so zero the ring once: those
+  // columns then hold zeros, or what an earlier frame decoded there.
+  if (!win_zeroed) {
+    const auto sb_h         = static_cast<int32_t>(sb->get_pos1().y - sb->get_pos0().y);
+    const size_t ring_rows  = static_cast<size_t>(std::min(cb_h, sb_h)) + 1;
+    const size_t buf_floats = ring_rows * static_cast<size_t>(sb->stride);
+#ifdef OPENHTJ2K_THREAD
+    std::memset(combined_buf, 0, 2 * buf_floats * sizeof(sprec_t));
+#else
+    std::memset(ring_buf, 0, buf_floats * sizeof(sprec_t));
+#endif
+    win_zeroed = true;
+  }
+}
+
 void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx, int32_t codeblock_height,
                                uint8_t roi_shift, bool use_ring) {
   res       = resolution;
@@ -152,6 +180,8 @@ void j2k_subband_row_buf::init(j2k_resolution *resolution, uint8_t b_idx, int32_
   ring_mode = use_ring;
   ring_buf  = nullptr;
   ring_y0   = -1;
+  clear_col_window();
+  win_zeroed = false;
 
 #ifdef OPENHTJ2K_THREAD
   prefetch_buf    = nullptr;
@@ -357,6 +387,10 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
           if (ring_mode && target_buf) zero_unbuilt_pband(target_buf, stride, sb_x0, cpb, y0, y1);
           continue;
         }
+        // Skip precincts outside the column window (set_col_window).
+        if (static_cast<int32_t>(cpb->get_pos1().x) <= win_x0
+            || static_cast<int32_t>(cpb->get_pos0().x) >= win_x1)
+          continue;
         // Jump directly to the first potentially-overlapping codeblock row.
         const uint32_t r0 =
             (y0 > cpb_y0_i) ? static_cast<uint32_t>((y0 - cpb_y0_i) / static_cast<int32_t>(cb_h)) : 0u;
@@ -367,6 +401,7 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
           // All columns in this row overlap with [y0, y1).
           for (uint32_t c = 0; c < ncx; ++c) {
             j2k_codeblock *block = cpb->access_codeblock(r * ncx + c);
+            if (!in_col_window(block)) continue;
             // Treat JPIP-masked codeblocks (compressed_data == nullptr despite
             // num_passes > 0) the same way as empty blocks: dequant never runs
             // and the target-buf region must be explicitly zeroed.
@@ -480,6 +515,10 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
       if (ring_mode && target_buf) zero_unbuilt_pband(target_buf, stride, sb_x0, cpb, y0, y1);
       continue;
     }
+    // Skip precincts outside the column window (set_col_window).
+    if (static_cast<int32_t>(cpb->get_pos1().x) <= win_x0
+        || static_cast<int32_t>(cpb->get_pos0().x) >= win_x1)
+      continue;
     // Jump directly to the first potentially-overlapping codeblock row.
     const uint32_t r0 =
         (y0 > cpb_y0_i) ? static_cast<uint32_t>((y0 - cpb_y0_i) / static_cast<int32_t>(cb_h)) : 0u;
@@ -490,6 +529,10 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
 
       for (uint32_t c = 0; c < ncx;) {
         j2k_codeblock *block = cpb->access_codeblock(r * ncx + c);
+        if (!in_col_window(block)) {
+          ++c;
+          continue;
+        }
 
         // JPIP-masked codeblocks (num_passes > 0 but no compressed data) take
         // the same "empty block" path — zero the target region and skip decode.
@@ -518,6 +561,7 @@ void j2k_subband_row_buf::decode_strip_core(sprec_t *target_buf, int32_t y0, int
           const uint32_t max_run = htj2k_dec_batch_lanes < 8u ? htj2k_dec_batch_lanes : 8u;
           while (run < max_run && c + run < ncx) {
             j2k_codeblock *nb = cpb->access_codeblock(r * ncx + c + run);
+            if (!in_col_window(nb)) break;
             if (!nb->num_passes || nb->get_compressed_data() == nullptr) break;
             if (!((nb->Cmodes & HT) >> 6)) break;
             if (nb->size.x != block->size.x || nb->size.y != block->size.y) break;
@@ -741,6 +785,9 @@ void j2k_subband_row_buf::trigger_prefetch(int32_t next_y0) {
   const ptrdiff_t stride = static_cast<ptrdiff_t>(sb->stride);
 
   auto process_block = [&](const CachedBlock &ce) {
+    // Outside the column window (set_col_window): not decoded.  Checked here, not when
+    // the strip's block list is cached, because the list serves every later frame.
+    if (ce.block != nullptr && !in_col_window(ce.block)) return;
     // Same JPIP-masked / empty-block handling as the walking path: if the
     // codeblock has no data to decode, zero the output region (when using a
     // ring prefetch buffer) and skip the decode task.

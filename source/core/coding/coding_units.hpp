@@ -860,12 +860,15 @@ class j2k_tile_component : public j2k_tile_base {
   // coarser level's range is derived by halving + widening for the 9/7 filter
   // support.  Must be called after init_line_decode() (states must exist; it
   // resets the window to full width).  Defaults (col_lo == 0, col_hi ==
-  // UINT32_MAX) select the full width.  Only the persistent (single-tile
-  // reuse) line decoder narrows; on the per-frame path this is a no-op and the
-  // full width is decoded, as it always has been there.  Narrowing that path
-  // too is a separate change: MSVC rounds the sub-range IDWT kernels 1 LSB
-  // differently from the full-width ones, so its windowed output would no
-  // longer match a full decode (tests/col_range_validation.cmake).
+  // UINT32_MAX) select the full width.  On both line-decode paths only the
+  // code-blocks that meet the window (widened by the synthesis filter's reach
+  // at each level) are decoded, unless a DFS level does not split the columns.
+  // Only the persistent (single-tile reuse) line decoder also narrows the IDWT
+  // itself; the per-frame path keeps the full-width kernels: MSVC rounds the
+  // sub-range IDWT kernels 1 LSB differently from the full-width ones, so its
+  // windowed output would no longer match a full decode
+  // (tests/col_range_validation.cmake).  Columns outside the window hold
+  // indeterminate values.
   void set_line_decode_col_range(uint32_t col_lo, uint32_t col_hi);
 
   // Apply a row range to this component's IDWT level chain.  row_lo / row_hi
