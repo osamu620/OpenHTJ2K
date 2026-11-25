@@ -36,6 +36,8 @@ struct Options {
 // One frame through the chosen entry point.  Throws what the library throws.
 void decode_frame(openhtj2k_decoder &dec, const uint8_t *cs, size_t len, const Options &o) {
   const uint32_t threads = (o.flags & 1) ? 4 : 1;
+  bool col_window        = false;  // a column window is set (o.flags & 0x10)
+  uint32_t col_lo        = 0;
   std::unique_ptr<uint8_t[]> padded;
   if (o.flags & 2) {
     padded.reset(new uint8_t[len + 16]);
@@ -68,6 +70,8 @@ void decode_frame(openhtj2k_decoder &dec, const uint8_t *cs, size_t len, const O
     const uint32_t w  = dec.get_component_width(0);
     const uint32_t lo = w ? (o.seed * 13u) % (w + 1) : 0;
     dec.set_col_range(lo, lo + 1 + (o.seed >> 1));
+    col_window = true;
+    col_lo     = lo;
   } else {
     dec.set_col_range(0, UINT32_MAX);
   }
@@ -116,7 +120,15 @@ void decode_frame(openhtj2k_decoder &dec, const uint8_t *cs, size_t len, const O
       auto on_row  = [&](uint32_t y, int32_t *const *row, uint16_t n) {
         for (size_t i = 0; i < n && i < w.size(); ++i) {
           if (row[i] == nullptr || w[i] == 0) continue;
-          acc += static_cast<uint32_t>(row[i][0]) + static_cast<uint32_t>(row[i][w[i] - 1]) + y;
+          // Outside a column window the samples are indeterminate (set_col_range()): read
+          // one column inside it, scaled to this component's width.
+          uint32_t x0 = 0, x1 = w[i] - 1;
+          if (col_window) {
+            const uint64_t xs = static_cast<uint64_t>(col_lo) * w[i] / std::max(w[0], 1u);
+            x0                = static_cast<uint32_t>(std::min<uint64_t>(xs, w[i] - 1));
+            x1 = x0;
+          }
+          acc += static_cast<uint32_t>(row[i][x0]) + static_cast<uint32_t>(row[i][x1]) + y;
           acc += dec.get_stream_component_row(static_cast<uint16_t>(i), y);
         }
       };
