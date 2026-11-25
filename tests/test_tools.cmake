@@ -47,6 +47,12 @@ if(Threads_FOUND AND NOT EMSCRIPTEN)
   add_subdirectory(tests/tools/concurrent_instances)
   target_include_directories(concurrent_instances PUBLIC source/core/interface)
   target_link_libraries(concurrent_instances PUBLIC open_htj2k PRIVATE openhtj2k_internal Threads::Threads)
+  # borrow_check: the decoder only reads a borrowed codestream (twice in a row, and from
+  # two threads at once)
+  add_executable(borrow_check)
+  add_subdirectory(tests/tools/borrow_check)
+  target_include_directories(borrow_check PUBLIC source/core/interface)
+  target_link_libraries(borrow_check PUBLIC open_htj2k PRIVATE openhtj2k_internal Threads::Threads)
   # threadpool_check: the worker pool's task ring grows instead of failing, and
   # SingleThreadScope hides the pool from a one-thread instance
   add_executable(threadpool_check)

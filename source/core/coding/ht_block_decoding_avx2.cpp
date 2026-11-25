@@ -860,9 +860,9 @@ void j2k_codeblock::dequantize(uint8_t ROIshift) const {
   }
 }
 
-// Per-block decode setup: segment validation, Lcup/Lref/Scup/Pcup derivation
-// and the modDcup buffer mutation.  Factored out of htj2k_decode so the
-// 1-way and batched entries share one source of truth.
+// Per-block decode setup: segment validation and Lcup/Lref/Scup/Pcup derivation.
+// Factored out of htj2k_decode so the 1-way and batched entries share one source
+// of truth.
 struct ht_dec_setup {
   int32_t Lcup, Pcup, Scup;
   uint32_t Lref;
@@ -943,7 +943,7 @@ static ht_dec_setup htj2k_dec_setup(j2k_codeblock *block) {
     return su;
   }
   // Bound the attacker-controlled cleanup length by the (already clamped)
-  // codeblock byte count before any Dcup[Lcup-1] access / modDcup write.
+  // codeblock byte count before any Dcup[Lcup-1] access.
   if (static_cast<uint32_t>(su.Lcup) > block->length) {
     open_htj2k::detail::warn("HT cleanup pass length %d exceeds codeblock bytes %u — malformed input.",
                              su.Lcup, block->length);
@@ -958,7 +958,7 @@ static ht_dec_setup htj2k_dec_setup(j2k_codeblock *block) {
                              block->length - static_cast<uint32_t>(su.Lcup));
     return su;
   }
-  uint8_t *Dcup = block->get_compressed_data();
+  const uint8_t *Dcup = block->get_compressed_data();
 
   if (block->num_passes > 1 && num_segments > 1) {
     su.Dref = block->get_compressed_data() + su.Lcup;
@@ -977,9 +977,12 @@ static ht_dec_setup htj2k_dec_setup(j2k_codeblock *block) {
     open_htj2k::detail::warn("cleanup pass suffix length %d is invalid.", su.Scup);
     return su;
   }
-  // modDcup (shall be done before the creation of state_VLC instance)
-  Dcup[su.Lcup - 1] = 0xFF;
-  Dcup[su.Lcup - 2] |= 0x0F;
+  // The codestream is only read.  The cleanup pass's last two bytes carry Scup in their
+  // low 12 bits, which the standard replaces with ones before decoding (modDcup):
+  // MEL_dec never reads the last byte and ORs 0x0F into the one before it, rev_buf
+  // takes only the upper nibble of that byte and computes its unstuffing from it with
+  // 0x0F ORed in, and the MagSgn reader stops at Pcup <= Lcup - 2.  Writing them into
+  // the buffer, as this decoder used to, changed the caller's codestream.
   su.Pcup = static_cast<int32_t>(su.Lcup - su.Scup);
   su.ok   = true;
   return su;
@@ -1034,9 +1037,7 @@ static bool htj2k_dec_finish(j2k_codeblock *block, const ht_dec_setup &su, const
   return true;
 }
 
-// Decode one block from an already-computed setup.  htj2k_dec_setup is NOT
-// idempotent (modDcup mutates the compressed buffer, so a re-run reads a
-// corrupted Scup) — every setup must be consumed by exactly one decode.
+// Decode one block from an already-computed setup.
 template <bool IndicesOnly = false>
 static bool htj2k_decode_su(j2k_codeblock *block, const ht_dec_setup &su, const uint8_t ROIshift) {
   if (!su.ok) return false;
@@ -1130,8 +1131,7 @@ bool htj2k_decode_batch(j2k_codeblock *const *blocks, uint32_t n, uint8_t ROIshi
       continue;
     }
 
-    // Setup mutates each block's buffer (modDcup): from here on, every one
-    // of the BN setups is consumed below, batched or not.
+    // Every one of the BN setups is consumed below, batched or not.
     ht_dec_setup su[BN];
     bool group = true;
     for (uint32_t k = 0; k < BN; ++k) {

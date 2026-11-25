@@ -886,12 +886,10 @@ bool htj2k_decode_cleanup_raw(j2k_codeblock *block) {
   // The encoder's own data: one cleanup segment of pass_length[0] bytes.
   const auto Lcup = static_cast<int32_t>(block->pass_length[0]);
   if (Lcup < 2 || static_cast<uint32_t>(Lcup) > block->length || block->num_ZBP >= 30) return false;
-  uint8_t *Dcup   = block->get_compressed_data();
-  const auto Scup = static_cast<int32_t>((Dcup[Lcup - 1] << 4) + (Dcup[Lcup - 2] & 0x0F));
+  const uint8_t *Dcup = block->get_compressed_data();
+  const auto Scup     = static_cast<int32_t>((Dcup[Lcup - 1] << 4) + (Dcup[Lcup - 2] & 0x0F));
   if (Scup < 2 || Scup > Lcup || Scup > 4079) return false;
-  // modDcup
-  Dcup[Lcup - 1] = 0xFF;
-  Dcup[Lcup - 2] |= 0x0F;
+  // The codestream is only read (see htj2k_decode below for the modDcup bytes).
   ht_cleanup_decode<true>(block, static_cast<uint8_t>(30 - block->num_ZBP), Lcup, Lcup - Scup, Scup);
   return true;
 }
@@ -960,7 +958,7 @@ static bool htj2k_decode_impl(j2k_codeblock *block, const uint8_t ROIshift) {
       return false;
     }
     // Bound the attacker-controlled cleanup length by the (already clamped)
-    // codeblock byte count before the Dcup[Lcup-1] access / modDcup write below.
+    // codeblock byte count before the Dcup[Lcup-1] access below.
     if (static_cast<uint32_t>(Lcup) > block->length) {
       open_htj2k::detail::warn("HT cleanup pass length %d exceeds codeblock bytes %u — malformed input.",
                                Lcup, block->length);
@@ -968,8 +966,11 @@ static bool htj2k_decode_impl(j2k_codeblock *block, const uint8_t ROIshift) {
     }
     Dcup            = block->get_compressed_data();
     const auto Scup = static_cast<int32_t>((Dcup[Lcup - 1] << 4) + (Dcup[Lcup - 2] & 0x0F));
-    Dcup[Lcup - 1]  = 0xFF;
-    Dcup[Lcup - 2] |= 0x0F;
+    // The codestream is only read.  The cleanup pass's last two bytes carry Scup in their
+    // low 12 bits, which the standard replaces with ones before decoding (modDcup):
+    // MEL_dec never reads the last byte and ORs 0x0F into the one before it, rev_buf
+    // takes only the upper nibble of that byte and computes its unstuffing from it with
+    // 0x0F ORed in, and the MagSgn reader stops at Pcup <= Lcup - 2.
 
     if (Scup < 2 || Scup > Lcup || Scup > 4079) {
       open_htj2k::detail::warn("cleanup pass suffix length %d is invalid.", Scup);

@@ -1793,8 +1793,7 @@ bool j2k_codeblock::create_compressed_buffer(buf_chain *tile_buf,
   //     borrow/copy asserts are compiled out, or a CRT abort on Windows MSVC).
   //   - Multiple tile-parts: the node is one tile-part's body, so an unbounded
   //     length reads the following SOT/SOD + next tile-part bytes (in-bounds of
-  //     the codestream buffer but wrong) and lets the HT modDcup write 0xFF
-  //     across the node boundary.
+  //     the codestream buffer but wrong).
   // Bounding by the current node's remainder — not the cross-node total —
   // covers both.  On a conformant stream that is not truncated, a code-block's
   // body lies wholly within one tile-part, so this never fires.
@@ -3772,11 +3771,12 @@ void j2k_tile_component::finalize_line_decode() {
 
 #ifdef OPENHTJ2K_THREAD
   // Drain all in-flight strip-prefetch tasks at the frame boundary.  Their
-  // htj2k_decode workers modDcup-mutate bytes borrowed directly from the
-  // codestream buffer (subband_row_buf borrow path); the next reuse frame's
-  // init() overwrites that same buffer, so a straggler left running across the
-  // boundary races it — corrupt tiles and nondeterministic "cleanup pass
-  // suffix length 4095 is invalid" warnings at threads >= 3.  The non-reuse
+  // htj2k_decode workers read bytes borrowed directly from the codestream
+  // buffer (subband_row_buf borrow path); the next reuse frame's init()
+  // overwrites that same buffer, so a straggler left running across the
+  // boundary would read the next frame's bytes (it once showed as corrupt
+  // tiles and "cleanup pass suffix length 4095 is invalid" warnings at
+  // threads >= 3, when the decoder also wrote into the buffer).  The non-reuse
   // path drains via free_resources() below, but the reuse path early-returns
   // before that, so this must run for both.  Only ll0_buf and hl_bufs are
   // initialised at every active level; lh/hh exist only for BIDIR levels

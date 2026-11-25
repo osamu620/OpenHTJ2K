@@ -295,7 +295,7 @@ class MEL_dec {
 // this class implementation is borrowed from OpenJPH
 class rev_buf {
  private:
-  uint8_t *buf;
+  const uint8_t *buf;
   uint64_t Creg;
   uint32_t bits;
   int32_t length;
@@ -306,9 +306,9 @@ class rev_buf {
   // before use.  Needed for per-lane arrays in the N-way step-1 kernel.
   rev_buf() {}
 
-  rev_buf(uint8_t *Dcup, int32_t Lcup, int32_t Scup) { init(Dcup, Lcup, Scup); }
+  rev_buf(const uint8_t *Dcup, int32_t Lcup, int32_t Scup) { init(Dcup, Lcup, Scup); }
 
-  void init(uint8_t *Dcup, int32_t Lcup, int32_t Scup) {
+  void init(const uint8_t *Dcup, int32_t Lcup, int32_t Scup) {
     buf        = Dcup + Lcup - 2;
     length     = Scup - 2;
     uint32_t d = *buf--;  // read a byte (only use it's half byte)
@@ -406,9 +406,9 @@ class rev_buf {
  * ht_cleanup_step1_nway: N-way lockstep step-1 (MEL + CxtVLC + UVLC) decoding
  *******************************************************************************/
 // Per-lane inputs for the N-way step-1 kernel; all fields are computed by the
-// per-block decode setup (including the modDcup buffer mutation) before the call.
+// per-block decode setup before the call.
 struct ht_step1_lane {
-  uint8_t *Dcup;          // block->get_compressed_data()
+  const uint8_t *Dcup;    // block->get_compressed_data(); only read
   int32_t Lcup;           // HT cleanup segment length
   int32_t Scup;           // MEL + VLC suffix length
   uint16_t *scratch;      // this lane's uint16_t[8 * 513] (tv, u) output
