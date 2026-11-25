@@ -2652,6 +2652,8 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
     for (uint32_t i = 0; i < this->inclusion_info.num_nodes; ++i)
       this->inclusion_info.node[i].reset_for_next_frame();
     for (uint32_t i = 0; i < this->ZBP_info.num_nodes; ++i) this->ZBP_info.node[i].reset_for_next_frame();
+    this->contrib_first = UINT16_MAX;
+    this->contrib_last  = 0;
     for (uint32_t idx = 0; idx < this->num_codeblock_x * this->num_codeblock_y; ++idx) {
       blk            = this->access_codeblock(idx);
       uint16_t first = 0;
@@ -2662,9 +2664,15 @@ void j2k_precinct_subband::generate_packet_header(packet_header_writer &header, 
       }
       // The passes before each layer, for the packets below and for layer_bytes().
       uint8_t before = 0;
+      uint16_t last  = 0;
       for (uint16_t l = 0; l < blk->num_layers; ++l) {
         blk->layer_start[l] = before;
         before              = static_cast<uint8_t>(before + blk->layer_passes[l]);
+        if (blk->num_layers > 1 && blk->layer_passes[l] != 0) last = l;
+      }
+      if (first < blk->num_layers) {
+        this->contrib_first = std::min(this->contrib_first, first);
+        this->contrib_last  = std::max(this->contrib_last, last);
       }
       this->inclusion_info.node[idx].set_value(first);
       this->ZBP_info.node[idx].set_value(blk->num_ZBP);
@@ -6094,7 +6102,8 @@ static void write_precinct_data(Sink &sink, j2k_precinct *cp, uint8_t num_bands,
   sink.put_N_bytes(cp->packet_header.get() + h0, cp->layer_header_end[layer] - h0);
   for (uint8_t b = 0; b < num_bands; ++b) {
     j2k_precinct_subband *cpb = cp->access_pband(b);
-    const uint32_t num_cblks  = cpb->num_codeblock_x * cpb->num_codeblock_y;
+    if (!cpb->contributes(layer)) continue;  // no code-block has bytes in this layer
+    const uint32_t num_cblks = cpb->num_codeblock_x * cpb->num_codeblock_y;
     for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
       j2k_codeblock *block = cpb->access_codeblock(block_index);
       uint32_t start = 0, len = 0;
@@ -7776,6 +7785,7 @@ void j2k_tile::build_packet_headers() {
           for (uint8_t b = 0; b < cr->num_bands; ++b) {
             j2k_precinct_subband *cpb = cp->access_pband(b);
             cpb->generate_packet_header(pckt_hdr, l);
+            if (!cpb->contributes(l)) continue;  // no code-block has bytes in this layer
             const uint32_t num_cblks = cpb->num_codeblock_x * cpb->num_codeblock_y;
             for (uint32_t block_index = 0; block_index < num_cblks; ++block_index) {
               uint32_t start = 0, len = 0;
