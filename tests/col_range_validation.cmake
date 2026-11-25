@@ -5,7 +5,9 @@
 # drives the single-tile reuse path, which is where the SIMD sub-range horizontal
 # IDWT kernels (idwt_1d_filtr_irrev97_planar_sr_{avx2,avx512,neon,wasm}) actually
 # run — that is the path the WASM JPIP viewer uses for zoomed regions.
-# Fixtures are SINGLE-TILE only (the column-range analogue of row_range_validation).
+# On the stream path a window skips the code-blocks (and, with several tile
+# columns, the tiles) that do not meet it, widened by the synthesis filter's
+# reach at each level; the IDWT keeps its full-width kernels there.
 
 add_test(NAME cr_p0_04       COMMAND col_range_compare ${CONFORMANCE_DATA_DIR}/p0_04.j2k)
 add_test(NAME cr_p0_05       COMMAND col_range_compare ${CONFORMANCE_DATA_DIR}/p0_05.j2k)
@@ -17,11 +19,22 @@ add_test(NAME cr_p0_ht_08_11 COMMAND col_range_compare ${CONFORMANCE_DATA_DIR}/d
 add_test(NAME cr_p1_ht_02_11 COMMAND col_range_compare ${CONFORMANCE_DATA_DIR}/ds1_ht_02_b11.j2k)
 add_test(NAME cr_p1_ht_03_11 COMMAND col_range_compare ${CONFORMANCE_DATA_DIR}/ds1_ht_03_b11.j2k)
 
+# Several tile columns: tiles outside the window are not decoded, the others get the window
+# in their own columns.  16 x 16 tiles of 128 (HT and Part 1, three components), 8 x 8
+# tiles, and 15 x 15 tiles of 37 x 37 (tiles that do not line up with the code-block grid
+# of the next tile).  The narrow built-in window (37 columns) skips all but one or two tile
+# columns.  These keep the full-width IDWT kernels, so they run with every compiler.
+add_test(NAME cr_tiles_ht_07     COMMAND col_range_compare ${CONFORMANCE_DATA_DIR}/ds0_ht_07_b11.j2k)
+add_test(NAME cr_tiles_ht_07_r1  COMMAND col_range_compare ${CONFORMANCE_DATA_DIR}/ds0_ht_07_b11.j2k -reduce 1)
+add_test(NAME cr_tiles_p0_07_r2  COMMAND col_range_compare ${CONFORMANCE_DATA_DIR}/p0_07.j2k -reduce 2)
+add_test(NAME cr_tiles_ht_p1_04  COMMAND col_range_compare ${CONFORMANCE_DATA_DIR}/ds1_ht_04_b9.j2k)
+add_test(NAME cr_tiles_ht_p1_05  COMMAND col_range_compare ${CONFORMANCE_DATA_DIR}/ds1_ht_05_b11.j2k)
+add_test(NAME cr_tiles_p1_05_r1  COMMAND col_range_compare ${CONFORMANCE_DATA_DIR}/p1_05.j2k -reduce 1)
+
 # Reuse-path variants — exercise the SIMD sub-range IDWT kernels on the
 # single-tile reuse path (the path the WASM JPIP viewer uses).  This is the only
-# path that actually narrows the decode: the per-frame (non-reuse) path ignores
-# set_col_range and decodes full width, so the plain cr_ tests above only check
-# that the window setting is harmless there.  The reuse probe validates several strictly-interior
+# path whose IDWT narrows to the window; the per-frame (non-reuse) path skips the
+# code-blocks outside it but keeps the full-width kernels.  The reuse probe validates several strictly-interior
 # windows per fixture, including one with an unaligned col_lo — that is what
 # exercises the unaligned-load path in the vertical sub-range kernels (an aligned
 # load faulted on AVX2 when col_lo - u0 was not a multiple of 8).

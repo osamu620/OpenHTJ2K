@@ -1063,7 +1063,30 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
     tc.w.resize(num_components);
     tc.last_k.resize(num_components);
   }
-  std::vector<uint32_t> order(numTiles.x);
+  std::vector<uint32_t> order;
+  order.reserve(numTiles.x);
+
+  // Column window (set_col_range), in reduced reference-grid columns of the image (0 = its
+  // first column).  A tile column that does not meet it is not decoded; its columns of the
+  // output rows hold zeros.  The others get the window in their own columns.  A component
+  // with XRsiz > 1 maps the window to [col_lo / XRsiz, ceil(col_hi / XRsiz)), which can
+  // reach up to XRsiz - 1 reference columns further, so the test widens it by that much.
+  const bool col_window = col_lo_ != 0 || col_hi_ != UINT32_MAX;
+  uint32_t max_xr       = 1;
+  for (uint16_t c = 0; c < num_components; ++c) {
+    element_siz r;
+    main_header.SIZ->get_subsampling_factor(r, c);
+    max_xr = std::max(max_xr, r.x);
+  }
+  const uint64_t img_x0 = stream_row_map::ceil_shift(Osiz.x, reduce_NL);
+  // Reduced reference-grid columns [x0, x1) of tile column tx, relative to the image.
+  auto tile_col_span = [&](uint32_t tx, uint64_t &x0, uint64_t &x1) {
+    const uint64_t t0 = static_cast<uint64_t>(TOsiz.x) + static_cast<uint64_t>(tx) * Tsiz.x;
+    x0 = stream_row_map::ceil_shift(std::max<uint64_t>(t0, Osiz.x), reduce_NL) - img_x0;
+    x1 = stream_row_map::ceil_shift(std::min<uint64_t>(t0 + Tsiz.x, siz.x), reduce_NL) - img_x0;
+  };
+  const uint64_t win_lo = (col_lo_ > max_xr) ? col_lo_ - max_xr : 0;
+  const uint64_t win_hi = static_cast<uint64_t>(col_hi_) + max_xr;
 
   for (uint32_t ty = 0; ty < numTiles.y; ++ty) {
     uint64_t g0, g1;
@@ -1083,7 +1106,15 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
       accum[c].assign(static_cast<size_t>(std::max(tr_rows[c], 1U)) * width[c], 0);
     }
 
-    for (uint32_t tx = 0; tx < numTiles.x; ++tx) order[tx] = ty * numTiles.x + tx;
+    order.clear();
+    for (uint32_t tx = 0; tx < numTiles.x; ++tx) {
+      if (col_window) {
+        uint64_t x0, x1;
+        tile_col_span(tx, x0, x1);
+        if (x1 <= win_lo || x0 >= win_hi) continue;  // outside the column window
+      }
+      order.push_back(ty * numTiles.x + tx);
+    }
     // The columns of each component the tile covers.
     auto prepare = [&](uint32_t slot, uint32_t tile_idx) {
       tile_columns &tc = columns[slot];
@@ -1116,8 +1147,17 @@ void openhtj2k_decoder_impl::invoke_line_based_stream(
           std::memcpy(dst, rows[c], tc.w[c] * sizeof(int32_t));
         }
       };
-      tileSet[tile_idx].decode_line_based_stream(main_header, reduce_NL, scatter, row_limit_, row_lo_,
-                                                 col_lo_, col_hi_, skip_mct_, nullptr,
+      // The window in this tile's own columns (the tile decode takes it relative to the
+      // tile), widened like the test above.
+      uint32_t t_lo = 0, t_hi = UINT32_MAX;
+      if (col_window) {
+        uint64_t x0, x1;
+        tile_col_span(tile_idx - ty * numTiles.x, x0, x1);
+        t_lo = static_cast<uint32_t>(std::max(win_lo, x0) - x0);
+        t_hi = static_cast<uint32_t>(std::min(win_hi, x1) - x0);
+      }
+      tileSet[tile_idx].decode_line_based_stream(main_header, reduce_NL, scatter, row_limit_, row_lo_, t_lo,
+                                                 t_hi, skip_mct_, nullptr,
                                                  /*emit_all_rows=*/true);
     };
     decode_tiles(tileSet, order, window, prepare, decode);
