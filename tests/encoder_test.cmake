@@ -1071,3 +1071,21 @@ set_tests_properties(dec_two_pgm PROPERTIES DEPENDS enc_two_pgm)
 add_test(NAME comp_two_pgm_0 COMMAND imgcmp two_pgm_00.pgx ${GRAY12_PGM} 0 0)
 add_test(NAME comp_two_pgm_1 COMMAND imgcmp two_pgm_01.pgx ${GRAY16_PGM} 0 0)
 set_tests_properties(comp_two_pgm_0 comp_two_pgm_1 PROPERTIES DEPENDS dec_two_pgm)
+
+# Resolution reduction stops reading a tile's packets after the last resolution it decodes
+# when the progression runs through the resolutions outermost (RPCL, RLCP, LRCP of one
+# layer).  The same image coded in such an order and in CPRL (identical code-blocks, other
+# packet order; the traversal does not stop early in CPRL) must give the same -reduce 2
+# decode.  128 x 128 precincts and 256 x 256 tiles: several precincts per resolution and
+# several tiles, 9/7.
+set(_RO_ARGS Creversible=no Qfactor=85 "Cprecincts={128,128}" "Stiles={256,256}")
+foreach(_ro CPRL RPCL RLCP LRCP)
+  add_test(NAME enc_reduce_order_${_ro}
+           COMMAND open_htj2k_enc -i ${ENCODER_REF_DIR}/kodim23.ppm -o kodim23_ro_${_ro}.j2c Corder=${_ro} ${_RO_ARGS})
+  add_test(NAME dec_reduce_order_${_ro} COMMAND open_htj2k_dec -i kodim23_ro_${_ro}.j2c -o kodim23_ro_${_ro}_r2.ppm -reduce 2)
+  set_tests_properties(dec_reduce_order_${_ro} PROPERTIES DEPENDS enc_reduce_order_${_ro})
+endforeach()
+foreach(_ro RPCL RLCP LRCP)
+  add_test(NAME comp_reduce_order_${_ro} COMMAND imgcmp kodim23_ro_${_ro}_r2.ppm kodim23_ro_CPRL_r2.ppm 0 0)
+  set_tests_properties(comp_reduce_order_${_ro} PROPERTIES DEPENDS "dec_reduce_order_${_ro};dec_reduce_order_CPRL")
+endforeach()
