@@ -470,6 +470,12 @@ class j2k_precinct_subband : public j2k_region {
  public:
   uint32_t num_codeblock_x;
   uint32_t num_codeblock_y;
+  // Encoder: the first and the last layer with passes of any of the code-blocks
+  // (generate_packet_header() sets them at layer 0); the packets of other layers carry none
+  // of their bytes.  first > last when no code-block has passes.
+  uint16_t contrib_first = 1;
+  uint16_t contrib_last  = 0;
+  bool contributes(uint16_t layer) const { return layer >= contrib_first && layer <= contrib_last; }
   // The precinct-subband [p0, p1) of subband sb.  The encoder builds its code-blocks here;
   // the decoder (decoder = true) leaves that to build_codeblocks(), when the first packet
   // of the precinct that is not empty arrives, so precincts without coded data cost no
