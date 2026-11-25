@@ -25,6 +25,12 @@
   window's columns only (it was a zeroed full-width buffer of every component,
   about 200 MB for a 16384-wide tile row of 1024 rows). For the 1024 x 1024
   tiles above, a 1024 x 1024 window takes 38 ms instead of 80 ms.
+- Encoder and transcoder, several quality layers: the packets of a layer no
+  longer visit the code-blocks of a precinct band that has no bytes in that
+  layer. A 116-byte codestream declaring 65535 layers made the transcoder
+  visit every code-block for each of 65535 empty packets per precinct (0.73 s;
+  more than 25 s under AddressSanitizer, a fuzzer timeout); it takes 0.17 s.
+  The output is byte-identical.
 
 ## Fixed
 - JPIP: a codestream whose COC marker refers to a DFS decomposition (ISO/IEC
