@@ -45,15 +45,15 @@ Lossless coding of a 4096×2160 8-bit RGB frame on one thread
 
 | Lossless, one thread | OpenJPEG 2.5.4 | OpenHTJ2K Part 1 | OpenHTJ2K HT |
 |---|---:|---:|---:|
-| Encode | 800 ms | 554 ms (1.4×) | 69 ms (11.7×) |
-| Decode | 585 ms | 546 ms (1.1×) | 64 ms (9.2×) |
+| Encode | 798 ms | 555 ms (1.4×) | 69 ms (11.6×) |
+| Decode | 582 ms | 548 ms (1.1×) | 64 ms (9.1×) |
 
 Lossy decoding of the same frame (9/7 transform, `Qfactor=90`, about 0.6 bpp),
 both decoders reading the same codestreams:
 
 | Lossy 9/7 decode, one thread | OpenJPEG 2.5.4 | OpenHTJ2K |
 |---|---:|---:|
-| Part 1 codestream | 190 ms | 90 ms (2.1×) |
+| Part 1 codestream | 190 ms | 89 ms (2.1×) |
 | HT codestream | 139 ms | 30 ms (4.7×) |
 
 OpenHTJ2K's decode time includes writing the output file and OpenJPEG's does
