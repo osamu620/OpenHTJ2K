@@ -61,6 +61,11 @@
   decodes are 1-1.6% faster on Zen 5, and their peak memory drops by the
   buffer (a 7680 x 4320 RGB image: 50.5 MB -> 44.8 MB). The output is
   byte-identical.
+- Decoder, line-based inverse DWT on x86-64: the four 9/7 vertical lifting
+  steps of a row pair run in one pass over the columns with AVX2 and AVX-512 as
+  well, as they already did on NEON. One thread on Zen 5: 9/7 decodes 2.4%
+  faster with AVX-512 and about 4% with AVX2 (x86-64-v3), 5% for a 16384 x
+  16384 image. The output is byte-identical.
 
 ## Fixed
 - RTP receiver (`open_htj2k_rtp_recv` and the WebAssembly RTP module): a Main
