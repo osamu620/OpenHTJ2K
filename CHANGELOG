@@ -55,6 +55,12 @@
   extracted with per-lane shifts instead of multiplies, and without branching on
   the data. 5/3 decodes 1% faster on an Apple M1 Max. The output is
   byte-identical.
+- Decoder, `invoke_line_based_stream()` on one thread: the rows of a
+  component with an irreversible (float) transform are read where its inverse
+  DWT leaves them instead of being copied into a per-strip buffer first. 9/7
+  decodes are 1-1.6% faster on Zen 5, and their peak memory drops by the
+  buffer (a 7680 x 4320 RGB image: 50.5 MB -> 44.8 MB). The output is
+  byte-identical.
 
 ## Fixed
 - JPIP: a codestream whose COC marker refers to a DFS decomposition (ISO/IEC
