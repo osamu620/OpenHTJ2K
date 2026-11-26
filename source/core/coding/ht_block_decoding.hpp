@@ -1002,7 +1002,6 @@ class fwd_buf {
     int16x8_t mul_mask;
     uint8x16_t dup_lo;
     uint8x16_t add_01;
-    uint8x16_t bit_tab;
 
     DecodeConstants() {
       alignas(16) static const int16_t fm[8]   = {(int16_t)0x1110, 0x2220, 0x4440, (int16_t)0x8880,
@@ -1010,13 +1009,10 @@ class fwd_buf {
       alignas(16) static const int16_t mm[8]   = {8, 4, 2, 1, 8, 4, 2, 1};
       alignas(16) static const uint8_t dl[16]  = {0, 0, 2, 2, 4, 4, 6, 6, 8, 8, 10, 10, 12, 12, 14, 14};
       alignas(16) static const uint8_t a01[16] = {0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1};
-      alignas(16) static const uint8_t bt[16]  = {0xFF, 127, 63, 31, 15, 7, 3, 1,
-                                                  0xFF, 127, 63, 31, 15, 7, 3, 1};
       flag_mask                                = vld1q_s16(fm);
       mul_mask                                 = vld1q_s16(mm);
       dup_lo                                   = vld1q_u8(dl);
       add_01                                   = vld1q_u8(a01);
-      bit_tab                                  = vld1q_u8(bt);
     }
   };
 
@@ -1036,10 +1032,8 @@ class fwd_buf {
     int16x8_t flags  = vandq_s16(w0, c.flag_mask);
     uint16x8_t insig = vceqq_s16(flags, vzero16);
 
-    // Early exit if all 8 samples are insignificant.
-    if (vmaxvq_u16(vreinterpretq_u16_s16(flags)) == 0) {
-      return row;
-    }
+    // No early exit for eight insignificant samples: their m_n are zero, so they give a zero
+    // row and leave v_n unchanged, and a data-dependent branch here mispredicts.
 
     // Broadcast U values: U0 to lanes 0-3, U1 to lanes 4-7.
     int16x8_t U_vec =
@@ -1060,38 +1054,29 @@ class fwd_buf {
     inc_sum           = vaddq_s16(inc_sum, vextq_s16(vzero16, inc_sum, 4));
     int total_mn      = vgetq_lane_s16(inc_sum, 7);
 
-    // Fetch raw MagSgn bits (gated on total_mn > 0).
-    uint8x16_t ms_raw = vdupq_n_u8(0);
-    if (total_mn > 0) {
-      ms_raw = this->fetch_raw();
-      this->advance(static_cast<uint32_t>(total_mn));
-    }
+    // Fetch raw MagSgn bits.  With total_mn == 0 every lane's mask below (2^m_n - 1) is zero,
+    // so the bits fetched do not matter; fetching unconditionally avoids a branch.
+    uint8x16_t ms_raw = this->fetch_raw();
+    this->advance(static_cast<uint32_t>(total_mn));
 
     // Exclusive prefix sum = inclusive shifted right by 1 element.
     int16x8_t ex_sum = vextq_s16(vzero16, inc_sum, 7);
 
-    // Byte-level extraction via vqtbl1q_u8.
+    // Byte-level extraction via vqtbl1q_u8: lane k of d0 holds stream bytes (b, b+1) and lane
+    // k of d1 bytes (b+1, b+2), b = ex_sum >> 3.
     uint16x8_t byte_idx = vshrq_n_u16(vreinterpretq_u16_s16(ex_sum), 3);
-    uint16x8_t bit_idx  = vandq_u16(vreinterpretq_u16_s16(ex_sum), vdupq_n_u16(7));
+    int16x8_t bit_idx   = vandq_s16(ex_sum, vdupq_n_s16(7));
 
-    // Start bit_shift computation EARLY (independent of bidx chain).
-    uint8x16_t bit_shift = vqtbl1q_u8(c.bit_tab, vreinterpretq_u8_u16(bit_idx));
-
-    // Compute bidx in parallel with bit_shift above.
     uint8x16_t bidx = vqtbl1q_u8(vreinterpretq_u8_u16(byte_idx), c.dup_lo);
     bidx            = vaddq_u8(bidx, c.add_01);
     uint8x16_t d0   = vqtbl1q_u8(ms_raw, bidx);
     bidx            = vaddq_u8(bidx, vdupq_n_u8(1));
     uint8x16_t d1   = vqtbl1q_u8(ms_raw, bidx);
 
-    // bit_shift is ready by now (computed in parallel above).
-    uint16x8_t bit_shift16 = vaddq_u16(vreinterpretq_u16_u8(bit_shift), vdupq_n_u16(0x0101));
-
-    uint16x8_t d0_16  = vmulq_u16(vreinterpretq_u16_u8(d0), bit_shift16);
-    d0_16             = vshrq_n_u16(d0_16, 8);
-    uint16x8_t d1_16  = vmulq_u16(vreinterpretq_u16_u8(d1), bit_shift16);
-    d1_16             = vandq_u16(d1_16, vdupq_n_u16(0xFF00));
-    uint16x8_t ms_vec = vorrq_u16(d0_16, d1_16);
+    // The 16 stream bits from bit 8b + (ex_sum & 7): d0 >> bit gives the first 16 - bit of
+    // them, d1 << (8 - bit) the last 8 (byte b+1 lands on the same positions in both).
+    uint16x8_t ms_vec = vorrq_u16(vshlq_u16(vreinterpretq_u16_u8(d0), vnegq_s16(bit_idx)),
+                                  vshlq_u16(vreinterpretq_u16_u8(d1), vsubq_s16(vdupq_n_s16(8), bit_idx)));
 
     // Compute 2^m_n = (2 - e_k) << (U_q - 1).  NEON per-lane variable shift.
     int16x8_t w0_val   = vsubq_s16(vtwo16, vreinterpretq_s16_u16(emb_k));
