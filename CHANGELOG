@@ -31,6 +31,13 @@
   visit every code-block for each of 65535 empty packets per precinct (0.73 s;
   more than 25 s under AddressSanitizer, a fuzzer timeout); it takes 0.17 s.
   The output is byte-identical.
+- Decoder, line-based inverse DWT: after each row it fetches, the scheduler
+  looks only at the rows that row can let advance, instead of about twenty rows
+  once per lifting step; and on NEON builds the four 9/7 vertical lifting steps
+  of a row pair run in one pass over the columns. One thread, 768 x 512 RGB
+  HTJ2K images through `invoke_line_based_stream()`: 9/7 decodes are 8% faster
+  on an Apple M1 Max (10% for 512 x 512 images) and 4% faster on Zen 5, 5/3
+  decodes about 1% faster. The output is byte-identical.
 
 ## Fixed
 - JPIP: a codestream whose COC marker refers to a DFS decomposition (ISO/IEC
