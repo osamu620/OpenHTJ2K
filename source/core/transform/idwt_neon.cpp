@@ -421,6 +421,70 @@ OPENHTJ2K_MSVC_ARM64_NOINLINE void idwt_irrev_ver_step_fixed_neon(int32_t n, flo
     tgt[i] -= coeff * (prev[i] + next[i]);
 }
 
+// The four 9/7 vertical lifting steps that a new odd row r enables, in one pass over
+// the columns (rk is row r-k):
+//   r1 -= fD*(r2 + r0)   step D on row r-1
+//   r2 -= fC*(r3 + r1)   step C on row r-2
+//   r3 -= fB*(r4 + r2)   step B on row r-3
+//   r4 -= fA*(r5 + r3)   step A on row r-4
+// Six row loads and four stores per vector instead of twelve loads and four stores in
+// four passes.  Every column gets the operations of four idwt_irrev_ver_step_fixed_neon
+// calls, in the same order and with the same rounding: the same columns go through
+// vfmsq_f32 (all but the last n % 4) and the rest through the same scalar expression.
+OPENHTJ2K_MSVC_ARM64_NOINLINE void idwt_irrev97_ver_4step_neon(int32_t n, const float *r5, float *r4,
+                                                               float *r3, float *r2, float *r1,
+                                                               const float *r0) {
+  const float32x4_t vA = vdupq_n_f32(fA), vB = vdupq_n_f32(fB);
+  const float32x4_t vC = vdupq_n_f32(fC), vD = vdupq_n_f32(fD);
+  int32_t i = 0;
+  for (; i + 8 <= n; i += 8) {
+    float32x4_t a0 = vld1q_f32(r0 + i), a1 = vld1q_f32(r0 + i + 4);
+    float32x4_t b0 = vld1q_f32(r1 + i), b1 = vld1q_f32(r1 + i + 4);
+    float32x4_t c0 = vld1q_f32(r2 + i), c1 = vld1q_f32(r2 + i + 4);
+    float32x4_t d0 = vld1q_f32(r3 + i), d1 = vld1q_f32(r3 + i + 4);
+    float32x4_t e0 = vld1q_f32(r4 + i), e1 = vld1q_f32(r4 + i + 4);
+    float32x4_t f0 = vld1q_f32(r5 + i), f1 = vld1q_f32(r5 + i + 4);
+    b0 = vfmsq_f32(b0, vaddq_f32(c0, a0), vD);
+    b1 = vfmsq_f32(b1, vaddq_f32(c1, a1), vD);
+    c0 = vfmsq_f32(c0, vaddq_f32(d0, b0), vC);
+    c1 = vfmsq_f32(c1, vaddq_f32(d1, b1), vC);
+    d0 = vfmsq_f32(d0, vaddq_f32(e0, c0), vB);
+    d1 = vfmsq_f32(d1, vaddq_f32(e1, c1), vB);
+    e0 = vfmsq_f32(e0, vaddq_f32(f0, d0), vA);
+    e1 = vfmsq_f32(e1, vaddq_f32(f1, d1), vA);
+    vst1q_f32(r1 + i, b0);
+    vst1q_f32(r1 + i + 4, b1);
+    vst1q_f32(r2 + i, c0);
+    vst1q_f32(r2 + i + 4, c1);
+    vst1q_f32(r3 + i, d0);
+    vst1q_f32(r3 + i + 4, d1);
+    vst1q_f32(r4 + i, e0);
+    vst1q_f32(r4 + i + 4, e1);
+  }
+  for (; i + 4 <= n; i += 4) {
+    const float32x4_t a = vld1q_f32(r0 + i);
+    float32x4_t b       = vld1q_f32(r1 + i);
+    float32x4_t c       = vld1q_f32(r2 + i);
+    float32x4_t d       = vld1q_f32(r3 + i);
+    float32x4_t e       = vld1q_f32(r4 + i);
+    const float32x4_t f = vld1q_f32(r5 + i);
+    b                   = vfmsq_f32(b, vaddq_f32(c, a), vD);
+    c                   = vfmsq_f32(c, vaddq_f32(d, b), vC);
+    d                   = vfmsq_f32(d, vaddq_f32(e, c), vB);
+    e                   = vfmsq_f32(e, vaddq_f32(f, d), vA);
+    vst1q_f32(r1 + i, b);
+    vst1q_f32(r2 + i, c);
+    vst1q_f32(r3 + i, d);
+    vst1q_f32(r4 + i, e);
+  }
+  for (; i < n; ++i) {
+    r1[i] -= fD * (r2[i] + r0[i]);
+    r2[i] -= fC * (r3[i] + r1[i]);
+    r3[i] -= fB * (r4[i] + r2[i]);
+    r4[i] -= fA * (r5[i] + r3[i]);
+  }
+}
+
 void idwt_irrev_ver_sr_fixed_neon(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
                                   const int32_t v1, const int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch) {
   constexpr int32_t num_pse_i0[2] = {3, 4};
