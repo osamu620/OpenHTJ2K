@@ -281,6 +281,47 @@ void idwt_irrev_ver_step_fixed_avx512(int32_t n, float *prev, float *next, float
   }
 }
 
+// The four 9/7 vertical lifting steps that a new odd row r enables, in one pass over the
+// columns (rk is row r-k): D on r-1, C on r-2, B on r-3, A on r-4.  Six row loads and four
+// stores per vector instead of twelve loads and four stores in four passes.  Every column
+// gets the operations of four idwt_irrev_ver_step_fixed_avx512() calls in the same order and
+// with the same rounding (every column, the masked tail too, through _mm512_fnmadd_ps).
+void idwt_irrev97_ver_4step_avx512(int32_t n, const float *r5, float *r4, float *r3, float *r2,
+                                   float *r1, const float *r0) {
+  const __m512 vA = _mm512_set1_ps(fA), vB = _mm512_set1_ps(fB);
+  const __m512 vC = _mm512_set1_ps(fC), vD = _mm512_set1_ps(fD);
+  int32_t i = 0;
+  for (; i + 16 <= n; i += 16) {
+    __m512 b = _mm512_loadu_ps(r1 + i);
+    __m512 c = _mm512_loadu_ps(r2 + i);
+    __m512 d = _mm512_loadu_ps(r3 + i);
+    __m512 e = _mm512_loadu_ps(r4 + i);
+    b        = _mm512_fnmadd_ps(_mm512_add_ps(c, _mm512_loadu_ps(r0 + i)), vD, b);
+    c        = _mm512_fnmadd_ps(_mm512_add_ps(d, b), vC, c);
+    d        = _mm512_fnmadd_ps(_mm512_add_ps(e, c), vB, d);
+    e        = _mm512_fnmadd_ps(_mm512_add_ps(_mm512_loadu_ps(r5 + i), d), vA, e);
+    _mm512_storeu_ps(r1 + i, b);
+    _mm512_storeu_ps(r2 + i, c);
+    _mm512_storeu_ps(r3 + i, d);
+    _mm512_storeu_ps(r4 + i, e);
+  }
+  if (i < n) {
+    const __mmask16 mask = static_cast<__mmask16>((1U << (n - i)) - 1U);
+    __m512 b             = _mm512_maskz_loadu_ps(mask, r1 + i);
+    __m512 c             = _mm512_maskz_loadu_ps(mask, r2 + i);
+    __m512 d             = _mm512_maskz_loadu_ps(mask, r3 + i);
+    __m512 e             = _mm512_maskz_loadu_ps(mask, r4 + i);
+    b = _mm512_fnmadd_ps(_mm512_add_ps(c, _mm512_maskz_loadu_ps(mask, r0 + i)), vD, b);
+    c = _mm512_fnmadd_ps(_mm512_add_ps(d, b), vC, c);
+    d = _mm512_fnmadd_ps(_mm512_add_ps(e, c), vB, d);
+    e = _mm512_fnmadd_ps(_mm512_add_ps(_mm512_maskz_loadu_ps(mask, r5 + i), d), vA, e);
+    _mm512_mask_storeu_ps(r1 + i, mask, b);
+    _mm512_mask_storeu_ps(r2 + i, mask, c);
+    _mm512_mask_storeu_ps(r3 + i, mask, d);
+    _mm512_mask_storeu_ps(r4 + i, mask, e);
+  }
+}
+
 // Single-row rev53 LP vertical lifting: tgt[i] -= floor((prev[i]+next[i]+2)*0.25).
 void idwt_rev_ver_lp_step_avx512(int32_t n, const float *prev, const float *next, float *tgt) {
   const __m512 k025 = _mm512_set1_ps(0.25f);

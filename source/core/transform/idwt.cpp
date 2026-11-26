@@ -1382,6 +1382,19 @@ static inline void fill_pse(idwt_2d_state *s, int32_t r) {
 //   Phase 2 — HP Predict (odd  rows): needs LP neighbors at dl >= 1
 // Two dedicated single passes replace the while(progress) loop.
 //
+// The fused four-step 9/7 vertical kernel of the build's instruction set: the one whose single
+// step adv_irrev_ver_step_fn is (same lane width, same rounding, same tail), so the fused and
+// the step-by-step paths stay bit-identical.  WebAssembly and builds without AVX2 or NEON keep
+// the step-by-step path.
+#if defined(OPENHTJ2K_ENABLE_WASM_SIMD)
+#elif defined(OPENHTJ2K_ENABLE_AVX512)
+  #define OPENHTJ2K_IDWT97_VER_4STEP idwt_irrev97_ver_4step_avx512
+#elif defined(OPENHTJ2K_ENABLE_ARM_NEON)
+  #define OPENHTJ2K_IDWT97_VER_4STEP idwt_irrev97_ver_4step_neon
+#elif defined(OPENHTJ2K_ENABLE_AVX2)
+  #define OPENHTJ2K_IDWT97_VER_4STEP idwt_irrev97_ver_4step_avx2
+#endif
+
 // For irrev 9/7 (max_dl=2): use the generic while(progress) loop (also with dynamic lo).
 //
 // Fetched-row window:
@@ -1407,7 +1420,7 @@ static void cascade(idwt_2d_state *s, const int32_t fetched) {
     // An even (LP) row lets nothing advance: its own first step needs row r+1, and the
     // odd row r-1 needs it one level further first.  The same holds for 5/3.
     if ((fetched & 1) == 0) return;
-#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+#if defined(OPENHTJ2K_IDWT97_VER_4STEP)
     // Steady state of 9/7: a new odd row r finds rows r-1..r-5 at levels 0, 0, 1, 1, 2, so
     // the scan below would apply exactly D to r-1, C to r-2, B to r-3 and A to r-4 (C on r
     // waits for r+1, which is not in the ring yet; B on r-1 and A on r-2 wait for r).
@@ -1428,9 +1441,9 @@ static void cascade(idwt_2d_state *s, const int32_t fetched) {
           && dl[idwt_ring_slot(r - 5)] == 2
           && !(z[idwt_ring_slot(r)] && z[idwt_ring_slot(r - 2)] && z[idwt_ring_slot(r - 1)])) {
         const int32_t col0 = s->col_lo - s->u0;
-        idwt_irrev97_ver_4step_neon(s->col_hi - s->col_lo, rptr(s, r - 5) + col0, rptr(s, r - 4) + col0,
-                                    rptr(s, r - 3) + col0, rptr(s, r - 2) + col0,
-                                    rptr(s, r - 1) + col0, rptr(s, r) + col0);
+        OPENHTJ2K_IDWT97_VER_4STEP(s->col_hi - s->col_lo, rptr(s, r - 5) + col0, rptr(s, r - 4) + col0,
+                                   rptr(s, r - 3) + col0, rptr(s, r - 2) + col0,
+                                   rptr(s, r - 1) + col0, rptr(s, r) + col0);
         dl[idwt_ring_slot(r - 1)] = 1;
         dl[idwt_ring_slot(r - 2)] = 1;
         dl[idwt_ring_slot(r - 3)] = 2;
