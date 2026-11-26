@@ -627,6 +627,10 @@ struct idwt_2d_state {
   void *bot_pse_buf;           // bottom_pse × stride sprec_t; nullptr for HORZ/NO
   int8_t   top_dlevel[4];      // d_level per top-PSE slot (-1 = unfilled)
   int8_t   bot_dlevel[4];      // d_level per bot-PSE slot (-1 = unfilled)
+  // Real row each PSE slot mirrors (INT32_MIN for an unused slot), fixed at init:
+  // top_pse_src[i] ↔ row v0-1-i, bot_pse_src[i] ↔ row v1+i.
+  int32_t  top_pse_src[4];
+  int32_t  bot_pse_src[4];
 
   // ── sliding ring for real rows [v0, v1) (BIDIR only) ─────────────────────
   // Slot for absolute row r : idwt_ring_slot(r)

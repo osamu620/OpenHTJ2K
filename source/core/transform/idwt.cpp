@@ -1352,14 +1352,14 @@ static inline void fill_pse(idwt_2d_state *s, int32_t r) {
   const sprec_t *src = rptr(s, r);
   const bool z = is_zero(s, r);
   for (int8_t i = 1; i <= s->top_pse; ++i) {
-    if (s->top_dlevel[i - 1] < 0 && pse_source(s->v0 - i, s->v0, s->v1) == r) {
+    if (s->top_dlevel[i - 1] < 0 && s->top_pse_src[i - 1] == r) {
       memcpy(static_cast<sprec_t *>(s->top_pse_buf) + static_cast<ptrdiff_t>(i - 1) * s->stride, src, nb);
       s->top_dlevel[i - 1] = 0;
       s->top_pse_zero[i - 1] = z;
     }
   }
   for (int8_t i = 0; i < s->bottom_pse; ++i) {
-    if (s->bot_dlevel[i] < 0 && pse_source(s->v1 + i, s->v0, s->v1) == r) {
+    if (s->bot_dlevel[i] < 0 && s->bot_pse_src[i] == r) {
       memcpy(static_cast<sprec_t *>(s->bot_pse_buf) + static_cast<ptrdiff_t>(i) * s->stride, src, nb);
       s->bot_dlevel[i] = 0;
       s->bot_pse_zero[i] = z;
@@ -1383,16 +1383,33 @@ static inline void fill_pse(idwt_2d_state *s, int32_t r) {
 // Two dedicated single passes replace the while(progress) loop.
 //
 // For irrev 9/7 (max_dl=2): use the generic while(progress) loop (also with dynamic lo).
-static void cascade(idwt_2d_state *s) {
+//
+// Fetched-row window:
+//   Each phase only lets later phases advance (D lets C and B advance, C lets B and A,
+//   B lets A), so one pass in phase order reaches a state where no row can advance.
+//   Every call starts from such a state, and ring eviction only takes rows away.  A
+//   row r fetched at least 8 rows from both edges of the state fills no PSE slot (their
+//   sources lie within 5 rows of the edges), and a new row at level 0 can only let rows
+//   r-1, r-2, r-3 and r-4 advance, in that order (r-1 and r-2 for the two-step filters).
+//   For such a row the scan covers r-4..r instead of the whole ring.  `fetched` is
+//   INT32_MIN for the final pass.
+static void cascade(idwt_2d_state *s, const int32_t fetched) {
   // Margin: enough to cover PSE rows and propagation distance for this transform.
   // 5/3: top_pse≤2, propagation=2  → margin=6
   // 9/7: top_pse≤4, propagation=4  → margin=10
   const int32_t margin  = (int32_t)s->top_pse + max_dl(s->transformation) * 2 + 2;
   const int32_t lo_full = s->v0 - (int32_t)s->top_pse;
-  const int32_t lo      = (s->ring_origin - margin > lo_full)
+  int32_t lo            = (s->ring_origin - margin > lo_full)
                           ? s->ring_origin - margin : lo_full;
-  const int32_t hi      = (s->next_fetch < s->v1) ? s->next_fetch + s->bottom_pse
+  int32_t hi            = (s->next_fetch < s->v1) ? s->next_fetch + s->bottom_pse
                                                    : s->v1 + s->bottom_pse;
+  if (fetched >= s->v0 + 8 && fetched < s->v1 - 8) {
+    // An even (LP) row lets nothing advance: its own first step needs row r+1, and the
+    // odd row r-1 needs it one level further first.  The same holds for 5/3.
+    if ((fetched & 1) == 0) return;
+    if (lo < fetched - 4) lo = fetched - 4;
+    if (hi > fetched + 1) hi = fetched + 1;
+  }
 
   if (s->transformation != 0) {  // 2-step filters: rev53 and ATK irrev53 (max_dl=1)
     // Rev 5/3: exactly two phases — LP Update then HP Predict. No while(progress) needed.
@@ -1479,7 +1496,7 @@ static void fetch_one(idwt_2d_state *s) {
   }
   ++s->next_fetch;
   fill_pse(s, r);
-  cascade(s);
+  cascade(s, r);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1527,6 +1544,13 @@ void idwt_2d_state_init(idwt_2d_state *s,
   for (int32_t i = 0; i < IDWT_STATE_RING_DEPTH; ++i) { s->d_level[i] = -1; s->row_zero[i] = true; }
   for (int32_t i = 0; i < 4;                     ++i) { s->top_dlevel[i] = -1; s->top_pse_zero[i] = true; }
   for (int32_t i = 0; i < 4;                     ++i) { s->bot_dlevel[i] = -1; s->bot_pse_zero[i] = true; }
+  // The row each PSE slot mirrors.  PSEo needs at least two rows; a one-row state never
+  // fetches (pull_row_ref reads its single row directly).
+  for (int32_t i = 0; i < 4; ++i) {
+    const bool rows = v1 - v0 >= 2;
+    s->top_pse_src[i] = (rows && i < s->top_pse) ? pse_source(v0 - 1 - i, v0, v1) : INT32_MIN;
+    s->bot_pse_src[i] = (rows && i < s->bottom_pse) ? pse_source(v1 + i, v0, v1) : INT32_MIN;
+  }
 
   s->col_lo      = u0;
   s->col_hi      = u1;
@@ -1654,7 +1678,7 @@ sprec_t *idwt_2d_state_pull_row_ref(idwt_2d_state *s) {
   // Fetch source rows (and run cascade) until next_out is ready.
   while (get_dl(s, s->next_out) < mxdl) {
     if (s->next_fetch >= s->v1) {
-      cascade(s);  // final pass to drain bottom PSE
+      cascade(s, INT32_MIN);  // final pass to drain bottom PSE
       break;
     }
     // Advance ring_origin past already-output rows to make room for new fetches.
