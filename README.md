@@ -45,8 +45,8 @@ Lossless coding of a 4096×2160 8-bit RGB frame on one thread
 
 | Lossless, one thread | OpenJPEG 2.5.4 | OpenHTJ2K Part 1 | OpenHTJ2K HT |
 |---|---:|---:|---:|
-| Encode | 800 ms | 555 ms (1.4×) | 68 ms (11.8×) |
-| Decode | 586 ms | 550 ms (1.1×) | 64 ms (9.2×) |
+| Encode | 800 ms | 554 ms (1.4×) | 69 ms (11.7×) |
+| Decode | 585 ms | 546 ms (1.1×) | 64 ms (9.2×) |
 
 OpenHTJ2K's decode time includes writing the output file and OpenJPEG's does
 not, so the comparison is conservative for OpenHTJ2K.

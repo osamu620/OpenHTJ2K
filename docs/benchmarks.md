@@ -6,8 +6,9 @@ coder, against OpenJPEG, single-threaded, on x86-64. Everything here is
 produced by one script, `tools/bench/lossless_vs_openjpeg.py`, so the numbers
 can be regenerated on any machine and refreshed at each release.
 
-Measured 2026-11-01 on OpenHTJ2K 0.23.0 (code at b13d28b) against OpenJPEG
-v2.5.4.
+Measured 2026-11-26 on OpenHTJ2K main after 0.29.1 (code at 350a07b) against
+OpenJPEG v2.5.4. The numbers are within 1% of those measured on 0.23.0
+(2026-11-01).
 
 ## Results
 
@@ -26,24 +27,24 @@ Codec time as reported by each tool:
 
 | Lossless, one thread | OpenJPEG 2.5.4 | OpenHTJ2K Part 1 | OpenHTJ2K HT |
 |---|---:|---:|---:|
-| Encode | 800 ms | 555 ms (1.4×) | 68 ms (11.8×) |
-| Decode | 586 ms | 550 ms (1.1×) | 64 ms (9.2×) |
+| Encode | 800 ms | 554 ms (1.4×) | 69 ms (11.7×) |
+| Decode | 585 ms | 546 ms (1.1×) | 64 ms (9.2×) |
 | Codestream | 5.437 MB | 5.437 MB | 6.275 MB |
 
 Wall time of the whole CLI process (read the PPM, code, write the output):
 
 | Lossless, one thread | OpenJPEG 2.5.4 | OpenHTJ2K Part 1 | OpenHTJ2K HT |
 |---|---:|---:|---:|
-| Encode | 805 ms | 558 ms (1.4×) | 70 ms (11.5×) |
-| Decode | 816 ms | 553 ms (1.5×) | 67 ms (12.2×) |
+| Encode | 806 ms | 557 ms (1.4×) | 71 ms (11.4×) |
+| Decode | 814 ms | 549 ms (1.5×) | 66 ms (12.3×) |
 
 `kodim23.ppm` (768×512 8-bit RGB, `conformance_data/references/`), the
 in-repository fixture, codec time:
 
 | Lossless, one thread | OpenJPEG 2.5.4 | OpenHTJ2K Part 1 | OpenHTJ2K HT |
 |---|---:|---:|---:|
-| Encode | 52 ms | 44 ms (1.2×) | 4 ms (13.9×) |
-| Decode | 42 ms | 44 ms (1.0×) | 3 ms (13.1×) |
+| Encode | 52 ms | 43 ms (1.2×) | 4 ms (13.7×) |
+| Decode | 42 ms | 43 ms (1.0×) | 3 ms (13.4×) |
 | Codestream | 0.418 MB | 0.418 MB | 0.460 MB |
 
 Reading the numbers:
