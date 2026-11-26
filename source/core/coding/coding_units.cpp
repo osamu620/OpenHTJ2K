@@ -7149,6 +7149,40 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
   }
 #endif
 
+  // When the strip rows are pulled on this thread, a component whose IDWT rows are floats
+  // is read in place: Phase 2 pulls each of its rows (pull_line_ref()) just before it is
+  // finalized, instead of Phase 1 copying the whole strip into scratch.  A pulled row stays
+  // valid until the next pull of its component, and each component's rows of a strip are
+  // used in order, at most once; the rows of the strip Phase 2 does not use are pulled at
+  // its end, so the components advance exactly as before.  Rows of the reversible 5/3
+  // transform are int32 and still go through pull_strip_into_buf(), which converts them.
+#ifdef OPENHTJ2K_THREAD
+  const bool serial_pull = !can_parallel_pull;
+#else
+  const bool serial_pull = true;
+#endif
+  std::vector<uint8_t> in_place(NC, 0);
+  for (uint16_t c = 0; c < NC; ++c) in_place[c] = serial_pull && tcomp[c].transformation != 1;
+  std::vector<uint32_t> in_place_next(NC, 0);              // rows of the strip pulled so far
+  std::vector<const sprec_t *> in_place_row(NC, nullptr);  // the last of them
+  std::vector<sprec_t> zero_row;  // stands in for the rows of an exhausted component
+  // Row j (tile row of component c) of the current strip.
+  auto strip_row = [&](uint16_t c, uint32_t j) -> const sprec_t * {
+    const uint32_t r = j - base[c];
+    if (!in_place[c]) return strip_ptrs[c] + static_cast<size_t>(r) * ci[c].csize_x;
+    while (in_place_next[c] <= r) {
+      const sprec_t *row = tcomp[c].pull_line_ref();
+      if (row == nullptr) {
+        // As pull_strip_into_buf(): a component exhausted early reads as zeros.
+        if (zero_row.size() < ci[c].csize_x) zero_row.assign(ci[c].csize_x, 0.0f);
+        row = zero_row.data();
+      }
+      in_place_row[c] = row;
+      ++in_place_next[c];
+    }
+    return in_place_row[c];
+  };
+
   // ── Row-range fast-forward (set_row_range with row_lo > 0) ────────────────
   // When the caller narrows the viewport's lower bound, the tile rows above
   // the window carry no emit work — but the IDWT cascade still needs to consume
@@ -7227,7 +7261,11 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
 #endif
     {
       for (uint16_t c = 0; c < NC; ++c) {
-        strip_ptrs[c] = tcomp[c].pull_strip_into_buf(counts[c], ci[c].csize_x);
+        if (in_place[c]) {
+          in_place_next[c] = 0;  // pulled by strip_row() in Phase 2
+        } else {
+          strip_ptrs[c] = tcomp[c].pull_strip_into_buf(counts[c], ci[c].csize_x);
+        }
       }
     }
 
@@ -7302,9 +7340,9 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
             } else
 #endif
             {
-              const sprec_t *p0  = strip_ptrs[0] + rs * ci[0].csize_x;
-              const sprec_t *p1r = strip_ptrs[1] + rs * ci[1].csize_x;
-              const sprec_t *p2r = strip_ptrs[2] + rs * ci[2].csize_x;
+              const sprec_t *p0  = strip_row(0, base[0] + static_cast<uint32_t>(rs));
+              const sprec_t *p1r = strip_row(1, base[1] + static_cast<uint32_t>(rs));
+              const sprec_t *p2r = strip_row(2, base[2] + static_cast<uint32_t>(rs));
               fused_mct_finalize[xform_ct](p0, p1r, p2r, out_rows[0].data(), out_rows[1].data(),
                                            out_rows[2].data(), mct_w, fp);
             }
@@ -7318,7 +7356,7 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
         const uint32_t j = krow[c] - ci[c].t0;
         if (j == cur[c] || j < skip[c]) continue;
         cur[c]             = j;
-        const sprec_t *spf = strip_ptrs[c] + static_cast<size_t>(j - base[c]) * ci[c].csize_x;
+        const sprec_t *spf = strip_row(c, j);
         const CInfo &I     = ci[c];
         open_htj2k::finalize_f32_to_i32(spf, out_rows[c].data(), I.csize_x, I.scale, I.DC_OFFSET, I.MAXVAL,
                                         I.MINVAL);
@@ -7326,6 +7364,11 @@ void j2k_tile::decode_line_based_stream(j2k_main_header &hdr, uint8_t reduce_NL_
 
       if (y >= row_lo || emit_all_rows) cb(y, out_ptrs.data(), NC);
     }  // end of inner y-loop
+    // Pull the rows of the strip that Phase 2 did not use, as Phase 1 would have.
+    for (uint16_t c = 0; c < NC; ++c) {
+      if (!in_place[c]) continue;
+      for (; in_place_next[c] < counts[c]; ++in_place_next[c]) (void)tcomp[c].pull_line_ref();
+    }
   }  // end of outer strip loop
   // finalize_line_decode() for every component runs via finalize_guard's
   // destructor (covers both normal return and exception unwind).
