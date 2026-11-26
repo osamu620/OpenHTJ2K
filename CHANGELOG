@@ -43,6 +43,14 @@
   HTJ2K images through `invoke_line_based_stream()`: 9/7 decodes are 8% faster
   on an Apple M1 Max (10% for 512 x 512 images) and 4% faster on Zen 5, 5/3
   decodes about 1% faster. The output is byte-identical.
+- Decoder, HT cleanup pass: two quads that one MEL run of zeros covers, in zero
+  context, code no other bits; the NEON and WebAssembly kernels now write them
+  as zeros without running the VLC, U-VLC and MagSgn decoding, and the AVX2
+  kernel's MagSgn step writes groups of insignificant quads directly. One
+  thread, 9/7 HTJ2K at about 4 bpp: 16% faster on an Apple M1 Max for
+  768 x 512 images and 13-15% for 4K to 16K images; WebAssembly 8-12% faster;
+  Zen 5 3% faster. 5/3 decodes change by less than 1%. The output is
+  byte-identical.
 
 ## Fixed
 - JPIP: a codestream whose COC marker refers to a DFS decomposition (ISO/IEC
