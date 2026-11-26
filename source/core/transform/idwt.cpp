@@ -1407,6 +1407,42 @@ static void cascade(idwt_2d_state *s, const int32_t fetched) {
     // An even (LP) row lets nothing advance: its own first step needs row r+1, and the
     // odd row r-1 needs it one level further first.  The same holds for 5/3.
     if ((fetched & 1) == 0) return;
+#if defined(OPENHTJ2K_ENABLE_ARM_NEON)
+    // Steady state of 9/7: a new odd row r finds rows r-1..r-5 at levels 0, 0, 1, 1, 2, so
+    // the scan below would apply exactly D to r-1, C to r-2, B to r-3 and A to r-4 (C on r
+    // waits for r+1, which is not in the ring yet; B on r-1 and A on r-2 wait for r).
+    // adv_step() skips a step only when both neighbours are flagged zero, and clears the
+    // flag of a row it computes.  So if D runs (r-2 and r not both zero), C, B and A run
+    // too, each next to the row the step before it just computed, and the fused kernel
+    // does the same work in one pass.  If D is skipped, its rows r-2 and r are all-zero
+    // words and fD > 0, so computing it subtracts +0 and leaves r-1 bit for bit as it was
+    // (-0 included); with r-1 not flagged, C, B and A then run as above.  Anything else
+    // takes the scan.
+    static_assert(fD > 0.0f, "D on two zero rows must leave its row unchanged");
+    const int32_t r = fetched;
+    if (s->transformation == 0 && (r & 1) != 0 && s->ring_origin <= r - 5) {
+      int8_t *dl = s->d_level;
+      bool *z    = s->row_zero;
+      if (dl[idwt_ring_slot(r - 1)] == 0 && dl[idwt_ring_slot(r - 2)] == 0
+          && dl[idwt_ring_slot(r - 3)] == 1 && dl[idwt_ring_slot(r - 4)] == 1
+          && dl[idwt_ring_slot(r - 5)] == 2
+          && !(z[idwt_ring_slot(r)] && z[idwt_ring_slot(r - 2)] && z[idwt_ring_slot(r - 1)])) {
+        const int32_t col0 = s->col_lo - s->u0;
+        idwt_irrev97_ver_4step_neon(s->col_hi - s->col_lo, rptr(s, r - 5) + col0, rptr(s, r - 4) + col0,
+                                    rptr(s, r - 3) + col0, rptr(s, r - 2) + col0,
+                                    rptr(s, r - 1) + col0, rptr(s, r) + col0);
+        dl[idwt_ring_slot(r - 1)] = 1;
+        dl[idwt_ring_slot(r - 2)] = 1;
+        dl[idwt_ring_slot(r - 3)] = 2;
+        dl[idwt_ring_slot(r - 4)] = 2;
+        z[idwt_ring_slot(r - 1)]  = false;
+        z[idwt_ring_slot(r - 2)]  = false;
+        z[idwt_ring_slot(r - 3)]  = false;
+        z[idwt_ring_slot(r - 4)]  = false;
+        return;
+      }
+    }
+#endif
     if (lo < fetched - 4) lo = fetched - 4;
     if (hi > fetched + 1) hi = fetched + 1;
   }
