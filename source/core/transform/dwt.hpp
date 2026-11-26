@@ -325,6 +325,11 @@ void idwt_rev_ver_sr_fixed_avx512(sprec_t *in, int32_t u0, int32_t u1, int32_t v
 void idwt_irrev53_ver_sr_fixed_avx512(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int32_t v1,
                                       int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch);
 void idwt_irrev_ver_step_fixed_avx512(int32_t n, float *prev, float *next, float *tgt, float coeff);
+// The four 9/7 vertical lifting steps a new odd row r enables (D on r-1, C on r-2, B on r-3,
+// A on r-4) in one pass; rk is row r-k.  Bit-identical to four idwt_irrev_ver_step_fixed_avx512
+// calls in that order.
+void idwt_irrev97_ver_4step_avx512(int32_t n, const float *r5, float *r4, float *r3, float *r2,
+                                   float *r1, const float *r0);
 void idwt_rev_ver_lp_step_avx512(int32_t n, const float *prev, const float *next, float *tgt);
 void idwt_rev_ver_hp_step_avx512(int32_t n, const float *prev, const float *next, float *tgt);
 void idwt_1d_filtr_rev53_i32_avx512(int32_t *X, int32_t left, int32_t u_i0, int32_t u_i1);
@@ -433,6 +438,11 @@ void idwt_rev_ver_sr_fixed(sprec_t *in, int32_t u0, int32_t u1, int32_t v0, int3
 // unconditionally), out with >= IDWT_RING_PSE_LEFT writable floats before
 // index 0 and >= 8 after index u1-u0-1.
 #if defined(OPENHTJ2K_ENABLE_AVX2)
+// The four 9/7 vertical lifting steps a new odd row r enables (D on r-1, C on r-2, B on r-3,
+// A on r-4) in one pass; rk is row r-k.  Bit-identical to four idwt_irrev_ver_step_fixed_avx2
+// calls in that order.
+void idwt_irrev97_ver_4step_avx2(int32_t n, const float *r5, float *r4, float *r3, float *r2, float *r1,
+                                 const float *r0);
 void idwt_1d_filtr_irrev97_planar_avx2(sprec_t *out, const sprec_t *lp, const sprec_t *hp, int32_t u0,
                                        int32_t u1);
 // Sub-range (JPIP column-window) variant of the 9/7 planar kernel.  Lifts

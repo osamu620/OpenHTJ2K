@@ -302,6 +302,61 @@ void idwt_irrev_ver_step_fixed_avx2(int32_t n, float *prev, float *next, float *
     tgt[i] -= coeff * (prev[i] + next[i]);
 }
 
+// The four 9/7 vertical lifting steps that a new odd row r enables, in one pass over the
+// columns (rk is row r-k): D on r-1, C on r-2, B on r-3, A on r-4.  Six row loads and four
+// stores per vector instead of twelve loads and four stores in four passes.  Every column
+// gets the operations of four idwt_irrev_ver_step_fixed_avx2() calls in the same order and
+// with the same rounding: the same columns (all but the last n % 8) go through
+// _mm256_fnmadd_ps and the rest through the same scalar expression.
+void idwt_irrev97_ver_4step_avx2(int32_t n, const float *r5, float *r4, float *r3, float *r2, float *r1,
+                                 const float *r0) {
+  const __m256 vA = _mm256_set1_ps(fA), vB = _mm256_set1_ps(fB);
+  const __m256 vC = _mm256_set1_ps(fC), vD = _mm256_set1_ps(fD);
+  int32_t i = 0;
+  for (; i + 16 <= n; i += 16) {
+    __m256 b0 = _mm256_loadu_ps(r1 + i), b1 = _mm256_loadu_ps(r1 + i + 8);
+    __m256 c0 = _mm256_loadu_ps(r2 + i), c1 = _mm256_loadu_ps(r2 + i + 8);
+    __m256 d0 = _mm256_loadu_ps(r3 + i), d1 = _mm256_loadu_ps(r3 + i + 8);
+    __m256 e0 = _mm256_loadu_ps(r4 + i), e1 = _mm256_loadu_ps(r4 + i + 8);
+    b0        = _mm256_fnmadd_ps(_mm256_add_ps(c0, _mm256_loadu_ps(r0 + i)), vD, b0);
+    b1        = _mm256_fnmadd_ps(_mm256_add_ps(c1, _mm256_loadu_ps(r0 + i + 8)), vD, b1);
+    c0        = _mm256_fnmadd_ps(_mm256_add_ps(d0, b0), vC, c0);
+    c1        = _mm256_fnmadd_ps(_mm256_add_ps(d1, b1), vC, c1);
+    d0        = _mm256_fnmadd_ps(_mm256_add_ps(e0, c0), vB, d0);
+    d1        = _mm256_fnmadd_ps(_mm256_add_ps(e1, c1), vB, d1);
+    e0        = _mm256_fnmadd_ps(_mm256_add_ps(_mm256_loadu_ps(r5 + i), d0), vA, e0);
+    e1        = _mm256_fnmadd_ps(_mm256_add_ps(_mm256_loadu_ps(r5 + i + 8), d1), vA, e1);
+    _mm256_storeu_ps(r1 + i, b0);
+    _mm256_storeu_ps(r1 + i + 8, b1);
+    _mm256_storeu_ps(r2 + i, c0);
+    _mm256_storeu_ps(r2 + i + 8, c1);
+    _mm256_storeu_ps(r3 + i, d0);
+    _mm256_storeu_ps(r3 + i + 8, d1);
+    _mm256_storeu_ps(r4 + i, e0);
+    _mm256_storeu_ps(r4 + i + 8, e1);
+  }
+  for (; i + 8 <= n; i += 8) {
+    __m256 b = _mm256_loadu_ps(r1 + i);
+    __m256 c = _mm256_loadu_ps(r2 + i);
+    __m256 d = _mm256_loadu_ps(r3 + i);
+    __m256 e = _mm256_loadu_ps(r4 + i);
+    b        = _mm256_fnmadd_ps(_mm256_add_ps(c, _mm256_loadu_ps(r0 + i)), vD, b);
+    c        = _mm256_fnmadd_ps(_mm256_add_ps(d, b), vC, c);
+    d        = _mm256_fnmadd_ps(_mm256_add_ps(e, c), vB, d);
+    e        = _mm256_fnmadd_ps(_mm256_add_ps(_mm256_loadu_ps(r5 + i), d), vA, e);
+    _mm256_storeu_ps(r1 + i, b);
+    _mm256_storeu_ps(r2 + i, c);
+    _mm256_storeu_ps(r3 + i, d);
+    _mm256_storeu_ps(r4 + i, e);
+  }
+  for (; i < n; ++i) {
+    r1[i] -= fD * (r2[i] + r0[i]);
+    r2[i] -= fC * (r3[i] + r1[i]);
+    r3[i] -= fB * (r4[i] + r2[i]);
+    r4[i] -= fA * (r5[i] + r3[i]);
+  }
+}
+
 void idwt_irrev_ver_sr_fixed_avx2(sprec_t *in, const int32_t u0, const int32_t u1, const int32_t v0,
                                   const int32_t v1, const int32_t stride, sprec_t *pse_scratch, sprec_t **buf_scratch) {
   constexpr int32_t num_pse_i0[2] = {3, 4};
