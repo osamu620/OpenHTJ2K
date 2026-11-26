@@ -129,8 +129,8 @@ class FrameHandler {
   void reset();
 
   // Feed a Main Packet.  `codestream_bytes` must point at the bytes past the
-  // 8-byte RFC 9828 Main Packet payload header (and any XTRAB extension,
-  // currently always zero).  On return, out_frame is populated if this push
+  // 8-byte RFC 9828 Main Packet payload header and its XTRAB extension
+  // (MainPacketHeader::codestream_offset).  On return, out_frame is populated if this push
   // completed a frame.
   //
   // Returns true if the packet was accepted (with or without emitting a frame),

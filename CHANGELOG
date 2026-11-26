@@ -63,6 +63,11 @@
   byte-identical.
 
 ## Fixed
+- RTP receiver (`open_htj2k_rtp_recv` and the WebAssembly RTP module): a Main
+  Packet whose XTRAC field is not 0 was refused. RFC 9828 (section 8.4) requires
+  a receiver to accept it and ignore the XTRAB extension, XTRAC 4-byte words
+  after the 8-byte header; the receiver now skips XTRAB and reads the codestream
+  after it. (Senders still set XTRAC to 0, section 7.6.)
 - JPIP: a codestream whose COC marker refers to a DFS decomposition (ISO/IEC
   15444-2) hung the precinct index in an endless loop: the index read the DFS
   index byte `0xff` as 255 decomposition levels and counted the resolutions

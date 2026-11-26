@@ -41,15 +41,15 @@ struct RtpHeader {
 bool parse_rtp_header(const uint8_t* data, size_t len, RtpHeader& out, std::string& error);
 
 // -------- RFC 9828 Main Packet payload header (§5.1) --------
-// 8-byte fixed field; XTRAB extension follows when XTRAC != 0 (current
-// revision mandates XTRAC == 0 so we reject non-zero values).
+// 8-byte fixed field, then XTRAC 4-byte words of XTRAB.  A sender sets XTRAC = 0
+// (§7.6); a receiver accepts other values and skips XTRAB unread (§8.4).
 
 struct MainPacketHeader {
   uint8_t  mh        = 0;    // 2 bits: 0=Body(shouldn't see), 1=Main+Main, 2=Main+Body, 3=Single Main
   uint8_t  tp        = 0;    // 3 bits: image type (0=progressive, 1..4=interlaced, 5..6=PsF, 7=ext)
   uint8_t  ordh      = 0;    // 3 bits: progression order + resync signaling
   bool     p         = false;// 1 bit: PTSTAMP valid
-  uint8_t  xtrac     = 0;    // 3 bits: XTRAB length in 4-byte units (must be 0 in current revision)
+  uint8_t  xtrac     = 0;    // 3 bits: XTRAB length in 4-byte units (skipped, §8.4)
   uint16_t ptstamp   = 0;    // 12 bits
   uint8_t  eseq      = 0;    // 8 bits: high byte of extended sequence number
   bool     r         = false;// 1 bit: main header reuse

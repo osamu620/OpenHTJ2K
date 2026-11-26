@@ -612,6 +612,7 @@ if(_ohtj2k_build_tests)
   include(${CMAKE_CURRENT_SOURCE_DIR}/tests/marker_semantics.cmake)
   include(${CMAKE_CURRENT_SOURCE_DIR}/tests/truncation.cmake)
   include(${CMAKE_CURRENT_SOURCE_DIR}/tests/borrowed_input.cmake)
+  include(${CMAKE_CURRENT_SOURCE_DIR}/tests/rtp_payload.cmake)
   include(${CMAKE_CURRENT_SOURCE_DIR}/tests/install_check.cmake)
 
   # Auto-attach the cleanup fixture to every test added by the includes above.
