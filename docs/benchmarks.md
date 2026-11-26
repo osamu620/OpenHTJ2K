@@ -7,9 +7,8 @@ Everything here is produced by two scripts, `tools/bench/lossless_vs_openjpeg.py
 and `tools/bench/lossy_decode_vs_openjpeg.py`, so the numbers can be
 regenerated on any machine and refreshed at each release.
 
-Measured 2026-11-26 on OpenHTJ2K main after 0.29.1 (code at 350a07b) against
-OpenJPEG v2.5.4. The lossless numbers are within 1% of those measured on 0.23.0
-(2026-11-01).
+Measured 2026-11-26 on OpenHTJ2K 0.30.0 against OpenJPEG v2.5.4. The lossless
+numbers are within 1% of those measured on 0.23.0 (2026-11-01).
 
 ## Lossless coding
 
@@ -28,24 +27,24 @@ Codec time as reported by each tool:
 
 | Lossless, one thread | OpenJPEG 2.5.4 | OpenHTJ2K Part 1 | OpenHTJ2K HT |
 |---|---:|---:|---:|
-| Encode | 800 ms | 554 ms (1.4×) | 69 ms (11.7×) |
-| Decode | 585 ms | 546 ms (1.1×) | 64 ms (9.2×) |
+| Encode | 798 ms | 555 ms (1.4×) | 69 ms (11.6×) |
+| Decode | 582 ms | 548 ms (1.1×) | 64 ms (9.1×) |
 | Codestream | 5.437 MB | 5.437 MB | 6.275 MB |
 
 Wall time of the whole CLI process (read the PPM, code, write the output):
 
 | Lossless, one thread | OpenJPEG 2.5.4 | OpenHTJ2K Part 1 | OpenHTJ2K HT |
 |---|---:|---:|---:|
-| Encode | 806 ms | 557 ms (1.4×) | 71 ms (11.4×) |
-| Decode | 814 ms | 549 ms (1.5×) | 66 ms (12.3×) |
+| Encode | 802 ms | 558 ms (1.4×) | 71 ms (11.3×) |
+| Decode | 811 ms | 551 ms (1.5×) | 66 ms (12.2×) |
 
 `kodim23.ppm` (768×512 8-bit RGB, `conformance_data/references/`), the
 in-repository fixture, codec time:
 
 | Lossless, one thread | OpenJPEG 2.5.4 | OpenHTJ2K Part 1 | OpenHTJ2K HT |
 |---|---:|---:|---:|
-| Encode | 52 ms | 43 ms (1.2×) | 4 ms (13.7×) |
-| Decode | 42 ms | 43 ms (1.0×) | 3 ms (13.4×) |
+| Encode | 52 ms | 44 ms (1.2×) | 4 ms (13.7×) |
+| Decode | 42 ms | 44 ms (1.0×) | 3 ms (13.3×) |
 | Codestream | 0.418 MB | 0.418 MB | 0.460 MB |
 
 Reading the numbers:
@@ -74,7 +73,7 @@ Codec time as reported by each tool:
 
 | Lossy 9/7 decode, one thread | OpenJPEG 2.5.4 | OpenHTJ2K |
 |---|---:|---:|
-| Part 1 codestream (0.618 MB, 0.56 bpp) | 190 ms | 90 ms (2.1×) |
+| Part 1 codestream (0.618 MB, 0.56 bpp) | 190 ms | 89 ms (2.1×) |
 | HT codestream (0.691 MB, 0.62 bpp) | 139 ms | 30 ms (4.7×) |
 
 Wall time of the whole CLI process (read the codestream, decode, write the
@@ -83,7 +82,7 @@ PPM):
 | Lossy 9/7 decode, one thread | OpenJPEG 2.5.4 | OpenHTJ2K |
 |---|---:|---:|
 | Part 1 codestream | 418 ms | 92 ms (4.5×) |
-| HT codestream | 367 ms | 32 ms (11.4×) |
+| HT codestream | 367 ms | 32 ms (11.5×) |
 
 `kodim23.ppm` at `Qfactor=90`, codec time:
 
