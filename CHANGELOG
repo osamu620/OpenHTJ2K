@@ -51,6 +51,10 @@
   768 x 512 images and 13-15% for 4K to 16K images; WebAssembly 8-12% faster;
   Zen 5 3% faster. 5/3 decodes change by less than 1%. The output is
   byte-identical.
+- Decoder, HT cleanup pass on NEON: the MagSgn bits of a quad pair are
+  extracted with per-lane shifts instead of multiplies, and without branching on
+  the data. 5/3 decodes 1% faster on an Apple M1 Max. The output is
+  byte-identical.
 
 ## Fixed
 - JPIP: a codestream whose COC marker refers to a DFS decomposition (ISO/IEC
