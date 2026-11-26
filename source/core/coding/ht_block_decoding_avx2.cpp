@@ -291,6 +291,21 @@ static void ht_cleanup_step2(j2k_codeblock *block, const uint8_t pLSB, const int
         v_n             = _mm_setzero_si128();
         __m128i qinf128 = _mm_loadu_si128((__m128i *)sp);
 
+        // Four insignificant quads (no rho bit): they code no MagSgn bits and decode to zero
+        // samples, which dequantize to all-zero bits, and to zero exponents.
+        if (_mm_testz_si128(qinf128, _mm_set1_epi32(0x00F0))) {
+          _mm256_storeu_si256((__m256i *)mp0, _mm256_setzero_si256());
+          _mm256_storeu_si256((__m256i *)mp1, _mm256_setzero_si256());
+          elo     = _mm256_loadu_si256((__m256i *)(E_p + 7));
+          ehi     = _mm256_loadu_si256((__m256i *)(E_p + 9));
+          emx     = _mm256_max_epi32(elo, ehi);
+          epr     = _mm256_max_epi32(emx, _mm256_srli_si256(emx, 4));
+          emax128 = _mm256_castsi256_si128(_mm256_permutevar8x32_epi32(epr, perm_emax));
+          _mm256_storeu_si256((__m256i *)E_p, _mm256_setzero_si256());
+          E_p += 8;
+          continue;
+        }
+
         // Compute kappa for all 4 quads using vectorized emax128.
         __m128i rho128   = _mm_and_si128(qinf128, _mm_set1_epi32(0x00F0));
         __m128i gm1      = _mm_sub_epi32(rho128, _mm_set1_epi32(1));
@@ -430,6 +445,19 @@ static void ht_cleanup_step2(j2k_codeblock *block, const uint8_t pLSB, const int
       for (qx = QW; qx > 0; qx -= 2, sp += 4, mp0 += 4, mp1 += 4) {
         v_n             = _mm_setzero_si128();
         __m128i qinf128 = _mm_loadu_si128((__m128i *)sp);
+        // Two insignificant quads (lanes 0-1; lanes 2-3 are the next pair): as in the 16-bit
+        // path, zero samples and zero exponents, no MagSgn bits.
+        if (_mm_testz_si128(qinf128, _mm_set_epi32(0, 0, 0x00F0, 0x00F0))) {
+          _mm_storeu_si128((__m128i *)mp0, _mm_setzero_si128());
+          _mm_storeu_si128((__m128i *)mp1, _mm_setzero_si128());
+          elo128 = _mm_loadu_si128((__m128i *)(E_p + 3));
+          ehi128 = _mm_loadu_si128((__m128i *)(E_p + 5));
+          emx128 = _mm_max_epi32(elo128, ehi128);
+          epr128 = _mm_max_epi32(emx128, _mm_srli_si128(emx128, 4));
+          _mm_storeu_si128((__m128i *)E_p, _mm_setzero_si128());
+          E_p += 4;
+          continue;
+        }
         __m256i qinf256 = expand_two_quads(qinf128);
         __m256i U_q256;
         {
