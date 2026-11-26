@@ -76,6 +76,11 @@ add_executable(jph_box_check)
 add_subdirectory(tests/tools/jph_box_check)
 target_link_libraries(jph_box_check PUBLIC open_htj2k PRIVATE openhtj2k_internal)
 
+# rfc9828_parser_check: RFC 9828 payload header parsing of the RTP receiver (XTRAB skipped,
+# §8.4); no library dependency
+add_executable(rfc9828_parser_check)
+add_subdirectory(tests/tools/rfc9828_parser_check)
+
 # visual_weight_check: dump + invariant self-check for the analytic per-subband
 # visual (CSF) weighting (header-only, no library dependency)
 add_executable(visual_weight_check)

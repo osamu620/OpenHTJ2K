@@ -5,6 +5,8 @@
 
 #include "rfc9828_parser.hpp"
 
+#include <string>
+
 namespace open_htj2k::rtp_recv {
 
 namespace {
@@ -97,13 +99,6 @@ bool parse_main_packet_header(const uint8_t* payload, size_t len, MainPacketHead
   // Byte 3: ESEQ
   out.eseq = payload[3];
 
-  // Current RFC revision mandates XTRAC == 0.  Refuse anything else — we'd
-  // be consuming bytes we don't know how to interpret.
-  if (out.xtrac != 0) {
-    error = "main packet: XTRAC != 0 (future revision, unsupported)";
-    return false;
-  }
-
   // Byte 4: R(1) S(1) C(1) RSVD(4) RANGE(1)
   const uint8_t b4 = payload[4];
   out.r     = (b4 & 0x80) != 0;
@@ -135,9 +130,16 @@ bool parse_main_packet_header(const uint8_t* payload, size_t len, MainPacketHead
     return false;
   }
 
-  // XTRAB is zero-length in the current revision, so codestream starts
-  // immediately after byte 7.
-  out.codestream_offset = 8;
+  // §8.4: a receiver MUST accept XTRAC values other than 0 and MUST ignore the XTRAB
+  // field, XTRAC 4-byte words that follow the fixed header (§5.3).  Only a sender must
+  // set XTRAC = 0 (§7.6); later revisions of the format may define XTRAB.  The
+  // codestream bytes start after it.
+  const size_t header_len = 8 + 4 * static_cast<size_t>(out.xtrac);
+  if (len < header_len) {
+    error = "main packet: XTRAB (XTRAC = " + std::to_string(out.xtrac) + ") extends past the payload";
+    return false;
+  }
+  out.codestream_offset = header_len;
 
   return true;
 }

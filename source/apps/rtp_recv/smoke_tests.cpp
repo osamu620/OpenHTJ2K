@@ -60,6 +60,19 @@ int smoke_test_parser() {
   if (!parse_main_packet_header(main_hdr, sizeof(main_hdr), main, err)) return 1;
   if (main.mh != 3 || main.ordh != ORDH_PCRL_RESYNC || main.ptstamp != 0x0ABC
       || main.eseq != 0x42 || !main.r || !main.s || !main.range || main.prims != 1) return 1;
+  if (main.codestream_offset != 8) return 1;
+
+  // RFC 9828 §8.4: XTRAC != 0 is accepted and XTRAB (XTRAC 4-byte words) skipped.
+  uint8_t main_x[8 + 8 + 2] = {0};
+  std::memcpy(main_x, main_hdr, sizeof(main_hdr));
+  main_x[1] = static_cast<uint8_t>((main_x[1] & 0x8F) | (2u << 4));  // XTRAC = 2
+  std::memset(main_x + 8, 0xA5, 8);                                   // XTRAB
+  main_x[16] = 0xFF;
+  main_x[17] = 0x4F;  // codestream (SOC)
+  MainPacketHeader main_xt{};
+  if (!parse_main_packet_header(main_x, sizeof(main_x), main_xt, err)) return 1;
+  if (main_xt.xtrac != 2 || main_xt.codestream_offset != 16 || main_xt.ptstamp != 0x0ABC) return 1;
+  if (parse_main_packet_header(main_x, 12, main_xt, err)) return 1;  // XTRAB past the payload
 
   uint8_t body_hdr[8] = {0};
   body_hdr[0] = static_cast<uint8_t>(2u);
