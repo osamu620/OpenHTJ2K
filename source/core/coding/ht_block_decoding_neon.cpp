@@ -395,6 +395,44 @@ void ht_cleanup_decode(j2k_codeblock *block, const uint8_t &pLSB, const int32_t 
     context |= ((rho_p[0] & 0x8) << 6) | ((rho_p[1] & 0x2) << 8);   // (ne | nf) << 9
 
     for (qx = QW; qx > 0; qx -= 2) {
+      // Two quads in zero context inside one MEL run of zeros: quad 0's context is zero,
+      // the run holds at least two more zero events, and the row above gives quad 1 no
+      // context bits (quad 0 being zero gives it none either).  Both quads are then
+      // insignificant and code no CxtVLC, U-VLC (entries 0-63 of uvlc_dec_1 are zero) or
+      // MagSgn bits, so the decode below would only advance the readers by zero bits and
+      // write zeros.  Do that directly.
+      if (context == 0 && mel_run >= 4 && qx > 1
+          && ((rho_p[0] & 0x8) | (rho_p[1] & 0xA) | (rho_p[2] & 0x2)) == 0) {
+        mel_run -= 4;
+        rho1    = 0;
+        context = ((rho_p[1] & 0x8) << 4) | ((rho_p[2] & 0x2) << 6);   // (nw | n) << 7
+        context |= ((rho_p[2] & 0x8) << 6) | ((rho_p[3] & 0x2) << 8);  // (ne | nf) << 9
+        if (!skip_sigma) {
+          std::memset(sp0, 0, 4 * sizeof(*sp0));
+          std::memset(sp1, 0, 4 * sizeof(*sp1));
+          sp0 += 4;
+          sp1 += 4;
+        }
+        *rho_p++ = 0;
+        *rho_p++ = 0;
+        // Zero samples dequantize to all-zero bits in every output format.
+        vst1q_s32(mp0, vdupq_n_s32(0));
+        vst1q_s32(mp1, vdupq_n_s32(0));
+        mp0 += 4;
+        mp1 += 4;
+        // Exponent line: the same read-ahead of the row above, then zero exponents.
+        {
+          int32x2_t nm01 = vpmax_s32(vget_low_s32(vmaxq_s32(vld1q_s32(E_p + 3), vld1q_s32(E_p + 5))),
+                                     vget_high_s32(vmaxq_s32(vld1q_s32(E_p + 3), vld1q_s32(E_p + 5))));
+          int32x2_t nm23 = vpmax_s32(vget_low_s32(vmaxq_s32(vld1q_s32(E_p + 7), vld1q_s32(E_p + 9))),
+                                     vget_high_s32(vmaxq_s32(vld1q_s32(E_p + 7), vld1q_s32(E_p + 9))));
+          vEmax4         = vcombine_s32(nm01, nm23);
+        }
+        vst1q_s32(E_p, vdupq_n_s32(0));
+        E_p += 4;
+        continue;
+      }
+
       // Decoding of significance and EMB patterns and unsigned residual offsets
       vlcval       = VLC_dec.fetch();
       uint16_t tv0 = dec_table1[(vlcval & 0x7F) + context];
