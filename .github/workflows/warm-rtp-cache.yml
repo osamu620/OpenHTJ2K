@@ -29,6 +29,8 @@ jobs:
         # per Origin.  Browsers always send Origin on these cross-origin
         # fetches, so warm the entry the demo actually hits; a request
         # without Origin only fills an entry no browser ever reads.
+        # Leave out clips over the 512 MB cacheable-file limit: the edge
+        # answers them with BYPASS, so warming one only downloads it.
         env:
           WARM_ORIGIN: https://htj2k.osamu620.dev
         run: |
