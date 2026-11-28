@@ -96,6 +96,13 @@
   .stat .n em{font-style:normal; color:var(--acc);}
   .stat .l{font-size:13px; color:var(--ink2); margin-top:6px;}
 
+  /* release band */
+  .rel{display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:28px; align-items:center; padding:22px clamp(20px,4vw,56px); border-bottom:1px solid var(--line); background:var(--panel2);}
+  .rel .v{font-family:"IBM Plex Mono",monospace; font-size:13px; color:#fff; border:1px solid var(--acc); border-radius:5px; padding:4px 10px; white-space:nowrap;}
+  .rel p{margin:0; font-size:14.5px; color:var(--ink2); text-wrap:pretty;}
+  .rel p b{color:var(--ink); font-weight:500;}
+  .rel a{font-family:"IBM Plex Mono",monospace; font-size:13px; color:var(--acc2); text-decoration:none; white-space:nowrap;}
+  .rel a:hover{color:#fff;}
   /* formats table */
   .tablewrap{overflow-x:auto;}
   .table{width:100%; border-collapse:collapse; font-size:14px; min-width:560px;}
@@ -121,6 +128,7 @@
     .stats{grid-template-columns:repeat(2,1fr);}
   }
   @media (max-width:760px){
+    .rel{grid-template-columns:1fr; gap:12px;}
     .grid{grid-template-columns:1fr;}
     .navlinks{display:none;}
   }
@@ -138,7 +146,8 @@
     <div class="navlinks">
       <a href="#highlights">Overview</a>
       <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/README.md">Docs</a>
-      <a href="https://github.com/osamu620/OpenHTJ2K#quick-start">CLI</a>
+      <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/library.md">Library</a>
+      <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/cli_encoder.md">CLI</a>
       <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/jpip.md">JPIP</a>
       <a href="https://htj2k.osamu620.dev/">Live demo</a>
       <a href="#formats">Formats</a>
@@ -158,9 +167,9 @@
       <h1 class="h1">High-Throughput<br/>JPEG 2000, <em>open source.</em></h1>
       <p class="lede">A complete <b>C++</b> implementation of JPEG 2000 Part 1 and
         High-Throughput JPEG 2000 (Part 15) &mdash; SIMD-accelerated across x86-64, AArch64 and
-        WebAssembly, with a multi-threaded encode/decode pipeline.</p>
+        WebAssembly, multi-threaded, and built to embed in other image software.</p>
       <div class="cta">
-        <a class="btn btn-pri" href="https://github.com/osamu620/OpenHTJ2K#build-and-install">Quick build</a>
+        <a class="btn btn-pri" href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/building.md">Quick build</a>
         <a class="btn btn-sec" href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/README.md">Read the docs &rarr;</a>
       </div>
     </div>
@@ -182,7 +191,10 @@
           <div class="sp"></div>
           <div class="row"><span class="cm"># decode to RGB</span></div>
           <div class="row"><span class="pr">$</span> <span class="fn">open_htj2k_dec</span> -i in.j2c -o <span class="st">out.ppm</span></div>
-          <div class="row st">&#10003; 582 conformance tests passing</div>
+          <div class="sp"></div>
+          <div class="row"><span class="cm"># Part 1 &rarr; HTJ2K, coefficient domain</span></div>
+          <div class="row"><span class="pr">$</span> <span class="fn">open_htj2k_transcode</span> -i in.j2k -o <span class="st">out.j2c</span></div>
+          <div class="row st">&#10003; conformance tests passing</div>
         </div>
       </div>
     </div>
@@ -191,9 +203,16 @@
   <!-- STATS -->
   <section class="stats">
     <div class="stat"><div class="n">4K<em>@</em>60</div><div class="l">fps sustained, RFC 9828 RTP receiver</div></div>
-    <div class="stat"><div class="n">582</div><div class="l">conformance tests green in CI</div></div>
+    <div class="stat"><div class="n">15444<em>-</em>4</div><div class="l">conformance suite run in CI</div></div>
     <div class="stat"><div class="n">4<em>&times;</em></div><div class="l">SIMD targets: AVX2 &middot; AVX-512 &middot; NEON &middot; WASM</div></div>
     <div class="stat"><div class="n">Qfactor</div><div class="l">single-knob quality control for lossy encode, like JPEG</div></div>
+  </section>
+
+  <!-- LATEST RELEASE -->
+  <section class="rel">
+    <span class="v">v0.30.0 &middot; Nov 2026</span>
+    <p><b>Faster decoding.</b> Lossy HTJ2K decodes up to 24% faster on one thread, and region decoding skips what lies outside the request &mdash; a 1024&times;1024 window of a 16K&times;16K image in 38&nbsp;ms instead of 196&nbsp;ms.</p>
+    <a href="https://github.com/osamu620/OpenHTJ2K/releases">All releases &rarr;</a>
   </section>
 
   <!-- HIGHLIGHTS -->
@@ -205,8 +224,8 @@
         <p>Full HTJ2K encode + decode and Part 1 decode; partial Part 2.</p>
         <ul class="ul">
           <li>Conformance-tested against <b>ITU-T T.803 | ISO/IEC 15444-4</b></li>
-          <li>JPH <code>.jph</code> format with colour-spec box parsing</li>
-          <li>Automatic YCbCr colorspace detection on decode</li>
+          <li>JPH <code>.jph</code> and JP2 <code>.jp2</code> file formats</li>
+          <li>Truncated codestreams decode from the data they hold</li>
         </ul>
       </div>
       <div class="cell">
@@ -215,7 +234,44 @@
         <ul class="ul">
           <li><b>AVX2 / AVX-512</b> (x86-64), <b>NEON</b> (AArch64), <b>WASM SIMD</b></li>
           <li>Built-in thread pool for encode and decode</li>
+          <li>Region and reduced-resolution decode skip unneeded code-blocks and packets</li>
           <li>Three decode APIs: <code>invoke()</code> &middot; <code>line_based()</code> &middot; <code>stream()</code></li>
+        </ul>
+      </div>
+      <div class="cell">
+        <h3>Built to embed <span class="tag">library</span></h3>
+        <p>Designed for use inside other software that decodes files it did not write.</p>
+        <ul class="ul">
+          <li>Prints nothing: errors are exceptions, warnings go to a <b>message handler</b></li>
+          <li>Internals in namespace <code>open_htj2k</code>; no exported global symbols</li>
+          <li><code>is_truncated()</code> tells a partial image from a whole one</li>
+        </ul>
+      </div>
+      <div class="cell">
+        <h3>Quality control <span class="tag">Qfactor</span></h3>
+        <p>One parameter from 0 to 100, following the JPEG Qfactor guideline v2.0.</p>
+        <ul class="ul">
+          <li><code>Qweights=flat</code> for scientific and non-visual data</li>
+          <li><code>Qscale=bits</code> precision-scaled Qfactor for 10&ndash;16-bit samples</li>
+          <li><code>estimate_qfactor</code> recovers the Qfactor of existing files</li>
+        </ul>
+      </div>
+      <div class="cell">
+        <h3>Transcoder <span class="tag">experimental</span></h3>
+        <p>Part 1 &harr; HTJ2K in the coefficient domain: the decoder reconstructs the same image.</p>
+        <ul class="ul">
+          <li>No wavelet transform, re-quantisation or colour transform</li>
+          <li><code>-layers keep</code> preserves quality layers with placeholder passes</li>
+          <li>Outputs decoded pixel-identically by OpenJPEG 2.5.4</li>
+        </ul>
+      </div>
+      <div class="cell">
+        <h3>Hardened <span class="tag">fuzzed in CI</span></h3>
+        <p>Decoder, transcoder, JPIP and image readers are fuzzed on every pull request.</p>
+        <ul class="ul">
+          <li>libFuzzer targets under <b>AddressSanitizer</b> + <b>UBSan</b></li>
+          <li>Memory and work driven by header values are bounded</li>
+          <li>Speed A/B check fails a PR that regresses performance</li>
         </ul>
       </div>
       <div class="cell">
@@ -250,6 +306,7 @@
         <tbody>
           <tr><td>.jhc / .j2c / .j2k</td><td class="yes">&#10003;</td><td class="yes">&#10003;</td><td>HTJ2K / JPEG 2000 Part 1 codestream</td></tr>
           <tr><td>.jph</td><td class="yes">&#10003;</td><td class="yes">&#10003;</td><td>JPH file format; colour-spec box auto-detects YCbCr</td></tr>
+          <tr><td>.jp2</td><td class="yes">&#10003;</td><td class="yes">&#10003;</td><td>JP2 file format; Part 1 codestreams only</td></tr>
           <tr><td>PGM / PPM / PGX</td><td class="yes">&#10003;</td><td class="yes">&#10003;</td><td>Grayscale, packed RGB, per-component files</td></tr>
           <tr><td>TIFF</td><td class="yes">&#10003;</td><td class="no">&mdash;</td><td>8/16-bit per sample via libtiff; encode input only</td></tr>
           <tr><td>RAW</td><td class="no">&mdash;</td><td class="yes">&#10003;</td><td>Packed samples, decoder output only</td></tr>
@@ -269,11 +326,15 @@
         <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/building.md">Building</a>
         <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/cli_encoder.md">CLI encoder</a>
         <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/cli_decoder.md">CLI decoder</a>
+        <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/library.md">Library API</a>
+        <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/qfactor.md">Qfactor</a>
+        <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/wasm.md">WebAssembly</a>
         <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/jpip.md">JPIP</a>
       </div>
       <div class="footcol"><h4>Tools</h4>
         <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/cli_encoder.md">open_htj2k_enc</a>
         <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/cli_decoder.md">open_htj2k_dec</a>
+        <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/cli_transcoder.md">open_htj2k_transcode</a>
         <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/cli_rtp_recv.md">rtp_recv</a>
         <a href="https://github.com/osamu620/OpenHTJ2K/blob/main/docs/jpip.md">jpip_server</a>
       </div>
