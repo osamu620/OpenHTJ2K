@@ -11,8 +11,8 @@ Three demos ship with the library:
 
 | Demo | Binary / Page | Purpose |
 |---|---|---|
-| Mouse-driven foveation | `open_htj2k_jpip_demo` (native GLFW), [`jpip_demo.html`](https://htj2k-demo.pages.dev/jpip_demo.html) (browser) | Three concentric cones around the cursor (fovea / parafovea / periphery) at full / reduced / coarse resolutions |
-| Gigapixel pan + zoom viewer | [`jpip_viewer.html`](https://htj2k-demo.pages.dev/jpip_viewer.html) (browser) | Viewport-region decode for images larger than GPU texture limits |
+| Mouse-driven foveation | `open_htj2k_jpip_demo` (native GLFW), [`jpip_demo.html`](https://htj2k.osamu620.dev/jpip_demo.html) (browser) | Three concentric cones around the cursor (fovea / parafovea / periphery) at full / reduced / coarse resolutions |
+| Gigapixel pan + zoom viewer | [`jpip_viewer.html`](https://htj2k.osamu620.dev/jpip_viewer.html) (browser) | Viewport-region decode for images larger than GPU texture limits |
 | Foveation vs full-image benchmark | `open_htj2k_jpip_benchmark` | Bandwidth reduction + decode speedup across an NxN gaze grid |
 
 All three share the same [`open_htj2k_jpip_server`](#server--open_htj2k_jpip_server)
@@ -66,7 +66,7 @@ exercises every byte of the JPP-stream wire format):
 ./build/bin/open_htj2k_jpip_demo input.j2c
 ```
 
-Browser demos are deployed at `https://htj2k-demo.pages.dev/` and run
+Browser demos are deployed at `https://htj2k.osamu620.dev/` and run
 in any current Chromium- or Firefox-based browser; point them at your
 own server with the `?server=` URL parameter or the **Server** field
 in the top bar. Building the browser demos locally requires
