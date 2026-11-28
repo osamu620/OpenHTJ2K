@@ -10,7 +10,7 @@ OpenHTJ2K is a C++ library with command-line tools for encoding and decoding
 It is fast on x86-64, Arm and WebAssembly, and free under the BSD 3-Clause
 license.
 
-**Links:** [🌐 Website](https://osamu620.github.io/OpenHTJ2K/) · [▶ Live demo](https://htj2k-demo.pages.dev/) · [📖 Docs](docs/README.md)
+**Links:** [🌐 Website](https://osamu620.github.io/OpenHTJ2K/) · [▶ Live demo](https://htj2k.osamu620.dev/) · [📖 Docs](docs/README.md)
 
 ## Features
 
@@ -32,7 +32,7 @@ license.
   and write PGM, PPM, PGX and RAW.
 - **In the browser:** a WebAssembly build decodes inside the web page or
   under Node.js ([WebAssembly](docs/wasm.md)). Try the
-  [live demo](https://htj2k-demo.pages.dev/).
+  [live demo](https://htj2k.osamu620.dev/).
 - **Streaming (experimental):** a live RTP receiver (RFC 9828) that keeps up
   with 4K at 60 fps on a recent x86-64 CPU, and a JPIP server with foveated
   and gigapixel viewers.

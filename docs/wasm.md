@@ -2,7 +2,7 @@
 
 The decoder is also built as WebAssembly modules that run in a web page or under
 Node.js, with no plugin and no server-side decoding. The demos at
-**https://htj2k-demo.pages.dev/** use them.
+**https://htj2k.osamu620.dev/** use them.
 
 ## Build
 
@@ -109,7 +109,7 @@ scalar one. It decodes row by row, so a 4K RGB image needs about 52 MB of WASM m
 
 ## Demos
 
-The site at **https://htj2k-demo.pages.dev/** is built this way.
+The site at **https://htj2k.osamu620.dev/** is built this way.
 
 | Page | What it shows |
 |---|---|

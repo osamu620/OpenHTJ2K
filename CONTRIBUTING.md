@@ -62,7 +62,7 @@ ctest --test-dir build -R enc_lossless  # only the tests whose names match
   - it does the same through pkg-config, when pkg-config is available;
   - it compiles every installed header on its own.
 - **WebAssembly demo site:** `.github/workflows/deploy-wasm-demo.yml` rebuilds
-  every variant and publishes https://htj2k-demo.pages.dev/ when a push to
+  every variant and publishes https://htj2k.osamu620.dev/ when a push to
   `main` changes its inputs. `rtp_demo.html` takes URL parameters for A/B
   tests:
   - `?variant=mt_simd|simd|mt|scalar` and `?renderer=auto|webgl|2d` force a

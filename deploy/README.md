@@ -20,7 +20,7 @@ docker run --rm -v $PWD/data:/data \
   jpip-server /data/input.j2c
 
 # The tunnel URL is printed to stdout.
-# Open: https://htj2k-demo.pages.dev/jpip_demo.html?server=<tunnel-url>
+# Open: https://htj2k.osamu620.dev/jpip_demo.html?server=<tunnel-url>
 ```
 
 ## Production setup (named tunnel + custom domain)
@@ -39,7 +39,7 @@ docker run -d --restart=unless-stopped \
   -v $PWD/data:/data \
   jpip-server /data/input.j2c --tunnel-token <TOKEN>
 
-# Open: https://htj2k-demo.pages.dev/jpip_demo.html?server=https://jpip.yourdomain.com
+# Open: https://htj2k.osamu620.dev/jpip_demo.html?server=https://jpip.yourdomain.com
 ```
 
 ## Without Docker

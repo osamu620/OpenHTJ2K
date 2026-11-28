@@ -16,7 +16,7 @@
 #   ./scripts/jpip_tunnel.sh [port=8080]
 #
 #   # Open the WASM demo and paste the tunnel URL:
-#   https://htj2k-demo.pages.dev/jpip_demo.html
+#   https://htj2k.osamu620.dev/jpip_demo.html
 #
 # The tunnel prints a URL like:
 #   https://random-words.trycloudflare.com
