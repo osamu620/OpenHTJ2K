@@ -25,9 +25,16 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Warm each URL listed in rtp-samples.txt
+        # R2 answers with `Vary: Origin`, so the edge keeps one cache entry
+        # per Origin.  Browsers always send Origin on these cross-origin
+        # fetches, so warm the entry the demo actually hits; a request
+        # without Origin only fills an entry no browser ever reads.
+        env:
+          WARM_ORIGIN: https://htj2k.osamu620.dev
         run: |
           while IFS= read -r url; do
             [ -z "$url" ] && continue
             echo "→ $url"
-            curl -sS -o /dev/null -D - --max-time 300 "$url" | grep -iE 'cf-ray|cf-cache-status'
+            curl -sS -o /dev/null -D - --max-time 300 -H "Origin: $WARM_ORIGIN" "$url" \
+              | grep -iE 'cf-ray|cf-cache-status|access-control-allow-origin'
           done < .github/deploy/rtp-samples.txt

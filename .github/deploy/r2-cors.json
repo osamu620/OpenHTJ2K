@@ -3,10 +3,12 @@
     {
       "allowed": {
         "origins": [
+          "https://htj2k.osamu620.dev",
           "https://htj2k-demo.pages.dev",
           "https://osamu620.dev",
           "http://localhost:8000",
-          "http://localhost:3000"
+          "http://localhost:3000",
+          "http://localhost:8765"
         ],
         "methods": ["GET", "HEAD"],
         "headers": ["*"]
